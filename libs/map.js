@@ -1,82 +1,101 @@
 /**
- * Mapping-Funktion: Syscara → Webflow CMS
+ * Mapping Syscara → Webflow CMS fields
  */
 
-export function mapSyscaraAdToWebflow(ad) {
-  if (!ad) return null;
+export function mapVehicle(sys) {
+  try {
+    const id = sys.id;
+    const model = sys.model || {};
+    const engine = sys.engine || {};
+    const dims = sys.dimensions || {};
+    const prices = sys.prices || {};
+    const media = sys.media || [];
 
-  // Hersteller, Serie, Modell sauber auslesen
-  const producer = ad.model?.producer || "";
-  const series = ad.model?.series || "";
-  const model = ad.model?.model || "";
-  const model_add = ad.model?.model_add || "";
+    // Name: Hersteller + Serie + Modell
+    const name = `${model.producer || ""} ${model.series || ""} ${model.model || ""}`.trim();
 
-  // Vollständige Modellbezeichnung
-  const fullModelName = [producer, series, model].filter(Boolean).join(" ");
-
-  // Slug bauen
-  const slug =
-    `${producer}-${series}-${model}-${ad.id}`
+    // Slug: sauber + fallback auf ID
+    const slug = `${model.producer || "fahrzeug"}-${model.model || ""}-${id}`
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)/g, "");
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/--+/g, "-")
+      .replace(/^-|-$/g, "");
 
-  // Fahrzeugtyp korrekt mappen
-  const fahrzeugtyp =
-    ad.type === "Reisemobil" || ad.type === "Caravan"
-      ? ad.type
-      : ad.type || "";
+    // Fahrzeugart (Caravan oder Reisemobil)
+    const fahrzeugart =
+      sys.type === "Caravan" ? "Caravan" :
+      sys.type === "Reisemobil" ? "Reisemobil" :
+      sys.type || "";
 
-  // Miete oder Kauf bestimmen
-  const vermietung =
-    (Array.isArray(ad.flags) && ad.flags.includes("RENTAL_CAR")) ||
-    (ad.location?.name &&
-      ad.location.name.toLowerCase().includes("vermiet"));
+    // Zustand
+    const zustand = {
+      NEW: "Neu",
+      USED: "Gebraucht",
+      BE: "Gebraucht",
+    }[sys.condition] || sys.condition || "";
 
-  const verkauf_miete = vermietung ? "Miete" : "Kauf";
+    // Typ (z. B. Teilintegriert)
+    const fahrzeugtyp = sys.typeof || "";
 
-  // Bilder extrahieren (max. 25)
-  const allImages = Array.isArray(ad.media)
-    ? ad.media.filter((m) => m.group === "image").map((i) => i.id)
-    : [];
+    // Bilder vorbereiten
+    const imageIds = media
+      .filter((m) => m.group === "image" && m.type === "upload")
+      .map((m) => m.id);
 
-  const hauptbild = allImages.length > 0 ? allImages[0] : "";
-  const galerie = allImages.slice(0, 25);
+    const hauptbild = imageIds.length > 0 ? imageIds[0] : "";
 
-  // Kurzbeschreibung
-  const beschreibung_kurz =
-    ad.texts?.description_plain?.substring(0, 300) || "";
+    const galerie = imageIds.slice(0, 25);
 
-  return {
-    originalId: ad.id,
+    // Kilometerstand
+    const km = sys.mileage || "";
 
-    // Webflow-Felder:
-    name: fullModelName,
-    slug,
-    hersteller: producer,
-    serie: series,
-    modell: model,
-    modell_zusatz: model_add,
-    zustand: ad.condition || "",
-    fahrzeugart: ad.model?.model_add || "",
-    fahrzeugtyp,
-    ps: ad.engine?.ps?.toString() || "",
-    kw: ad.engine?.kw?.toString() || "",
-    kraftstoff: ad.engine?.fuel || "",
-    getriebe: ad.engine?.gear || "",
-    beschreibung: ad.texts?.description_plain || "",
-    beschreibung_kurz,
-    kilometer: ad.mileage?.toString() || "",
-    baujahr: ad.model?.modelyear?.toString() || "",
-    preis: ad.prices?.offer?.toString() || "",
-    breite: ad.dimensions?.width?.toString() || "",
-    hoehe: ad.dimensions?.height?.toString() || "",
-    laenge: ad.dimensions?.length?.toString() || "",
-    geraet_id: ad.id.toString(),
+    // Baujahr
+    const baujahr = model.modelyear || "";
 
-    verkauf_miete, // <-- NEUES FELD
+    // Preis (Brutto)
+    const preis = prices.offer || prices.basic || "";
 
-    hauptbild,
-    galerie
-  };
+    // Maße
+    const breite = dims.width || "";
+    const hoehe = dims.height || "";
+    const laenge = dims.length || "";
+
+    // Beschreibung
+    const beschreibung = sys.texts?.description || "";
+    const beschreibung_kurz = sys.texts?.description_plain || "";
+
+    return {
+      originalId: id, // wichtig für Delta-Sync
+      mapped: {
+        name,
+        slug,
+        hersteller: model.producer || "",
+        serie: model.series || "",
+        modell: model.model || "",
+        modell_zusatz: model.model_add || "",
+        zustand,
+        fahrzeugart,
+        fahrzeugtyp,
+        ps: engine.ps || "",
+        kw: engine.kw || "",
+        kraftstoff: engine.fuel || "",
+        getriebe: engine.gear || "",
+        beschreibung,
+        beschreibung_kurz,
+        kilometer: km,
+        baujahr,
+        preis,
+        breite,
+        hoehe,
+        laenge,
+        geraet_id: String(id),
+        hauptbild,
+        galerie
+      }
+    };
+
+  } catch (err) {
+    console.error("Mapping Error:", err);
+    return null;
+  }
 }
