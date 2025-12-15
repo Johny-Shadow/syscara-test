@@ -1,46 +1,34 @@
-// api/test-map.js
+import { mapVehicle } from "../../libs/map.js";
 
-import { mapAdToWebflow } from "../libs/map.js";
-
-export default async function handler(req, res) {
+export default function handler(req, res) {
   try {
-    // Syscara Login über BASIC AUTH
-    const auth = Buffer.from(
-      `${process.env.SYS_API_USER}:${process.env.SYS_API_PASS}`
-    ).toString("base64");
+    const sample = {
+      id: 135965,
+      producer: "Dethleffs",
+      series: "Just 90",
+      model: "T 6752 DBL",
+      model_add: "/Jubiläumsausstattung",
+      condition: "NEW",
+      type: "Reisemobil",
+      category: "Sale",
+      hp: 165,
+      kw: 121,
+      description_plain: "Beschreibung Beispiel",
+      description_short: "Kurzbeschreibung Beispiel",
+      mileage: 12000,
+      model_year: 2023,
+      price: 72900,
+      dimensions: { width: 233, height: 294, length: 696 },
+      media: [
+        { image: "https://example.com/1.jpg" },
+        { image: "https://example.com/2.jpg" }
+      ]
+    };
 
-    // 1. Ad-Liste holen
-    const response = await fetch("https://api.syscara.com/sale/ads/", {
-      headers: {
-        Authorization: `Basic ${auth}`,
-      },
-    });
+    const mapped = mapVehicle(sample);
 
-    if (!response.ok) {
-      return res
-        .status(500)
-        .json({ error: "Syscara fetch error", status: response.status });
-    }
-
-    const data = await response.json();
-
-    const firstKey = Object.keys(data)[0];
-    const firstAd = data[firstKey];
-
-    if (!firstAd) {
-      return res.status(404).json({ error: "No ads found" });
-    }
-
-    // 2. Mapping durchführen
-    const mapped = mapAdToWebflow(firstAd);
-
-    // 3. Ergebnis zurückgeben
-    res.status(200).json({
-      originalId: firstAd.id || firstKey,
-      mapped,
-    });
-  } catch (err) {
-    console.error("Mapping test error:", err);
-    res.status(500).json({ error: err.message });
+    return res.status(200).json(mapped);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
   }
 }
