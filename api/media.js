@@ -1,32 +1,54 @@
+// pages/api/media.js
+
 export default async function handler(req, res) {
-  const id = req.query.id;
-
-  if (!id) {
-    return res.status(400).send("Missing media ID");
-  }
-
   try {
-    const url = `https://api.syscara.com/services/Media/Download?id=${id}`;
+    const { id } = req.query;
 
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      return res.status(500).send("Failed to fetch media");
+    if (!id) {
+      return res.status(400).json({ error: "Missing media id" });
     }
 
-    // Content-Type von Syscara übernehmen
-    const contentType = response.headers.get("content-type") || "image/jpeg";
+    // Original-Syscara Bild-URL
+    const url = `https://api.syscara.com/media/${id}`;
 
-    // Bilddaten holen
-    const arrayBuffer = await response.arrayBuffer();
+    // Datei abrufen
+    const sysRes = await fetch(url);
+
+    if (!sysRes.ok) {
+      const text = await sysRes.text();
+      console.error("Syscara media error:", text);
+
+      return res.status(sysRes.status).json({
+        error: "Failed to fetch media from Syscara",
+        details: text,
+      });
+    }
+
+    // Content-Type übernehmen
+    const contentType = sysRes.headers.get("content-type");
+
+    // Wenn kein Bild → abbrechen
+    if (!contentType || !contentType.startsWith("image/")) {
+      const text = await sysRes.text();
+      console.error("❌ Kein Bildformat:", contentType, text);
+
+      return res.status(400).json({
+        error: "Not an image",
+        contentType,
+        body: text,
+      });
+    }
+
+    // Header für Webflow setzen
+    res.setHeader("Content-Type", contentType);
+
+    // Stream an Webflow weiterleiten
+    const arrayBuffer = await sysRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "public, max-age=3600");
-
-    return res.send(buffer);
+    res.send(buffer);
   } catch (err) {
-    console.error("Media Proxy Error:", err);
-    return res.status(500).send("Internal Server Error");
+    console.error("Unhandled error:", err);
+    res.status(500).json({ error: err.message });
   }
 }
