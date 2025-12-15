@@ -1,121 +1,213 @@
 import { mapVehicle } from "./map.js";
 
-const WEBFLOW_TOKEN = process.env.WEBFLOW_TOKEN;
-const WEBFLOW_COLLECTION = process.env.WEBFLOW_COLLECTION_ID;
+// ------------------------------------------------------
+// Webflow API Wrapper (POST / PATCH)
+// ------------------------------------------------------
+async function webflowRequest(method, url, body) {
+  const token = process.env.WEBFLOW_TOKEN;
 
-// Limit Webflow to 60 requests/min → 1 request / 1100ms
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+  if (!token) {
+    throw new Error("Missing WEBFLOW_TOKEN env variable");
+  }
 
-async function webflowRequest(url, method = "GET", body = null) {
-  await wait(1100);
-
-  const res = await fetch(url, {
+  const response = await fetch(url, {
     method,
     headers: {
-      Authorization: `Bearer ${WEBFLOW_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
+      accept: "application/json",
     },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    body: JSON.stringify(body),
   });
 
-  const json = await res.json();
-  if (!res.ok) {
-    console.error("Webflow Error:", json);
-    throw new Error(json.msg || "Webflow API error");
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error("Webflow Error:", data);
+    throw new Error("Webflow API error");
   }
-  return json;
+
+  return data;
 }
 
-async function getWebflowItems() {
-  const url = `https://api.webflow.com/v2/collections/${WEBFLOW_COLLECTION}/items`;
-  const res = await webflowRequest(url);
-  return res.items || [];
-}
 
-async function uploadImageToWebflow(imageId) {
-  return `https://source.syscara.com/media/${imageId}/full`; 
-}
-
-function hasChanged(webflowItem, mapped) {
-  for (const key of Object.keys(mapped)) {
-    const wfVal = webflowItem.fieldData?.[key];
-    const newVal = mapped[key];
-
-    if (Array.isArray(newVal)) {
-      if (JSON.stringify(wfVal || []) !== JSON.stringify(newVal)) return true;
-    } else {
-      if ((wfVal || "") !== (newVal || "")) return true;
-    }
-  }
-  return false;
-}
-
+// ------------------------------------------------------
+// Create new Webflow Item
+// ------------------------------------------------------
 async function createItem(mapped) {
-  console.log(`➕ CREATE ${mapped.name}`);
+  const collectionId = process.env.WEBFLOW_COLLECTION;
 
-  if (mapped.hauptbild) {
-    mapped.hauptbild = await uploadImageToWebflow(mapped.hauptbild);
-  }
+  const url = `https://api.webflow.com/v2/collections/${collectionId}/items`;
 
-  if (mapped.galerie?.length) {
-    mapped.galerie = await Promise.all(
-      mapped.galerie.map((imgId) => uploadImageToWebflow(imgId))
-    );
-  }
+  const body = {
+    isArchived: false,
+    isDraft: false,
+    fieldData: {
+      name: mapped.name,
+      slug: mapped.slug,
 
-  const url = `https://api.webflow.com/v2/collections/${WEBFLOW_COLLECTION}/items`;
-  return webflowRequest(url, "POST", { fieldData: mapped });
+      hersteller: mapped.hersteller,
+      serie: mapped.serie,
+      modell: mapped.modell,
+      modell_zusatz: mapped.modell_zusatz,
+
+      zustand: mapped.zustand,
+      fahrzeugart: mapped.fahrzeugart,
+      fahrzeugtyp: mapped.fahrzeugtyp,
+
+      ps: mapped.ps ?? "",
+      kw: mapped.kw ?? "",
+      kraftstoff: mapped.kraftstoff,
+      getriebe: mapped.getriebe,
+
+      beschreibung: mapped.beschreibung,
+      beschreibung_kurz: mapped.beschreibung_kurz,
+
+      kilometer: mapped.kilometer,
+      baujahr: mapped.baujahr,
+      preis: mapped.preis,
+
+      breite: mapped.breite,
+      hoehe: mapped.hoehe,
+      laenge: mapped.laenge,
+
+      geraet_id: mapped.geraet_id,
+
+      hauptbild: mapped.hauptbild,
+      galerie: mapped.galerie,
+
+      verkauf_miete: mapped.verkauf_miete
+    }
+  };
+
+  return webflowRequest("POST", url, body);
 }
 
+
+// ------------------------------------------------------
+// Update existing Webflow Item
+// ------------------------------------------------------
 async function updateItem(itemId, mapped) {
-  console.log(`♻ UPDATE ${mapped.name}`);
+  const collectionId = process.env.WEBFLOW_COLLECTION;
+  const url = `https://api.webflow.com/v2/collections/${collectionId}/items/${itemId}`;
 
-  if (mapped.hauptbild) {
-    mapped.hauptbild = await uploadImageToWebflow(mapped.hauptbild);
-  }
+  const body = {
+    isArchived: false,
+    isDraft: false,
+    fieldData: {
+      name: mapped.name,
+      slug: mapped.slug,
 
-  if (mapped.galerie?.length) {
-    mapped.galerie = await Promise.all(
-      mapped.galerie.map((imgId) => uploadImageToWebflow(imgId))
-    );
-  }
+      hersteller: mapped.hersteller,
+      serie: mapped.serie,
+      modell: mapped.modell,
+      modell_zusatz: mapped.modell_zusatz,
 
-  const url = `https://api.webflow.com/v2/collections/${WEBFLOW_COLLECTION}/items/${itemId}`;
-  return webflowRequest(url, "PATCH", { fieldData: mapped });
+      zustand: mapped.zustand,
+      fahrzeugart: mapped.fahrzeugart,
+      fahrzeugtyp: mapped.fahrzeugtyp,
+
+      ps: mapped.ps ?? "",
+      kw: mapped.kw ?? "",
+      kraftstoff: mapped.kraftstoff,
+      getriebe: mapped.getriebe,
+
+      beschreibung: mapped.beschreibung,
+      beschreibung_kurz: mapped.beschreibung_kurz,
+
+      kilometer: mapped.kilometer,
+      baujahr: mapped.baujahr,
+      preis: mapped.preis,
+
+      breite: mapped.breite,
+      hoehe: mapped.hoehe,
+      laenge: mapped.laenge,
+
+      geraet_id: mapped.geraet_id,
+
+      hauptbild: mapped.hauptbild,
+      galerie: mapped.galerie,
+
+      verkauf_miete: mapped.verkauf_miete
+    }
+  };
+
+  return webflowRequest("PATCH", url, body);
 }
 
+
+// ------------------------------------------------------
+// Fetch all existing Webflow items
+// ------------------------------------------------------
+async function getExistingWebflowItems() {
+  const collectionId = process.env.WEBFLOW_COLLECTION;
+  const url = `https://api.webflow.com/v2/collections/${collectionId}/items?limit=1000`;
+
+  const data = await webflowRequest("GET", url);
+  return data.items || [];
+}
+
+
+// ------------------------------------------------------
+// DELTA SYNC LOGIC
+// ------------------------------------------------------
 export async function runDeltaSync(syscaraData) {
   console.log("🚀 Starting Delta Sync…");
 
-  const mappedVehicles = Object.values(syscaraData).map((v) => mapVehicle(v));
-  const webflowItems = await getWebflowItems();
+  const syscaraList = Object.values(syscaraData);
+  console.log(`📦 ${syscaraList.length} Fahrzeuge von Syscara erhalten`);
 
-  const byId = {};
-  for (const item of webflowItems) {
-    const gid = item.fieldData?.geraet_id;
-    if (gid) byId[gid] = item;
+  // Load Webflow items
+  const existingItems = await getExistingWebflowItems();
+  console.log(`📚 ${existingItems.length} bestehende Webflow-Einträge geladen`);
+
+  const existingById = {};
+  for (const item of existingItems) {
+    if (item.fieldData?.geraet_id) {
+      existingById[item.fieldData.geraet_id] = item;
+    }
   }
 
-  for (const vehicle of mappedVehicles) {
-    const { originalId, mapped } = vehicle;
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
 
-    const existing = byId[String(originalId)];
+  // LOOP THROUGH SYSCARA VEHICLES
+  for (const vehicle of syscaraList) {
+    try {
+      const mapped = mapVehicle(vehicle);
 
-    if (!existing) {
-      await createItem(mapped);
+      if (!mapped) {
+        console.warn(`⚠ Fahrzeug ${vehicle?.id} übersprungen (Mapping fehlgeschlagen)`);
+        skipped++;
+        continue;
+      }
+
+      const existingItem = existingById[mapped.geraet_id];
+
+      if (!existingItem) {
+        await createItem(mapped);
+        console.log(`➕ Created: ${mapped.name}`);
+        created++;
+        continue;
+      }
+
+      await updateItem(existingItem.id, mapped);
+      console.log(`♻️ Updated: ${mapped.name}`);
+      updated++;
+
+    } catch (err) {
+      console.error(`❌ Fehler bei Fahrzeug ${vehicle?.id}:`, err.message);
+      skipped++;
       continue;
     }
-
-    const changed = hasChanged(existing, mapped);
-    if (!changed) {
-      console.log(`✔ NO CHANGE for ${mapped.name}`);
-      continue;
-    }
-
-    await updateItem(existing.id, mapped);
   }
 
-  console.log("✅ Sync completed");
+  console.log("🎉 Delta Sync abgeschlossen!");
+  console.log(`➕ Neu: ${created}`);
+  console.log(`♻️ Aktualisiert: ${updated}`);
+  console.log(`⚠ Übersprungen: ${skipped}`);
+
+  return { created, updated, skipped };
 }
+
