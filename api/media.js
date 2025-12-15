@@ -1,4 +1,5 @@
 // pages/api/media.js
+
 export default async function handler(req, res) {
   try {
     const { id } = req.query;
@@ -10,7 +11,7 @@ export default async function handler(req, res) {
     const user = process.env.SYS_API_USER;
     const pass = process.env.SYS_API_PASS;
 
-    const url = `https://api.syscara.com/data/media/?media_id=${id}&file=path`;
+    const url = `https://api.syscara.com/data/media/?media_id=${id}`;
 
     const response = await fetch(url, {
       headers: {
@@ -20,37 +21,27 @@ export default async function handler(req, res) {
       },
     });
 
-    const data = await response.json();
+    const json = await response.json();
 
-    if (!response.ok) {
+    if (!json[id] || !json[id].file) {
       return res.status(500).json({
-        error: "Syscara error",
-        details: data,
+        error: "Ungültige Antwort von Syscara",
+        details: json,
       });
     }
 
-    const item = data[id];
-
-    if (!item || !item.name) {
-      return res.status(500).json({
-        error: "Media not found in Syscara response",
-        details: data,
-      });
-    }
-
-    const publicUrl = `https://api.syscara.com/data/media/${item.name}`;
+    const item = json[id];
 
     return res.status(200).json({
       ok: true,
       id,
       fileName: item.name,
-      publicUrl,
+      base64: item.file,
     });
+
   } catch (e) {
-    return res.status(500).json({
-      error: "Internal error",
-      details: e.message,
-    });
+    return res.status(500).json({ error: e.message });
   }
 }
+
 
