@@ -1,8 +1,5 @@
 // libs/map.js
 
-//
-// Hilfsfunktion: Slug erzeugen
-//
 function slugify(str) {
   return String(str)
     .toLowerCase()
@@ -12,103 +9,127 @@ function slugify(str) {
     .replace(/(^-|-$)+/g, "");
 }
 
-//
-// Hauptfunktion: Syscara → Webflow Mapping
-//
 export function mapVehicle(ad) {
+  // ----------------------------------------------------
+  // 1) Falls Syscara das Fahrzeug als { "135965": { ... }} liefert,
+  //    ziehen wir zuerst das innere Objekt raus.
+  // ----------------------------------------------------
+  let vehicleId = null;
 
-  // ----------------------------------------------------
-  // 1) Syscara liefert manchmal: { "135965": { ... } }
-  // ----------------------------------------------------
-  if (typeof ad === "object" && !ad.id) {
-    const key = Object.keys(ad)[0];
-    ad = ad[key];
+  if (typeof ad === "object" && ad !== null && !ad.id) {
+    const keys = Object.keys(ad);
+    if (keys.length > 0) {
+      vehicleId = keys[0];
+      ad = ad[vehicleId];
+    }
+  } else {
+    vehicleId = ad.id;
   }
 
-  const id = ad.id ? String(ad.id) : "";
+  vehicleId = vehicleId ? String(vehicleId) : "";
 
   // ----------------------------------------------------
-  // 2) Modelldaten sauber extrahieren
+  // 2) Grunddaten / Name / Slug
   // ----------------------------------------------------
   const producer = ad.model?.producer || "";
-  const series   = ad.model?.series || "";
-  const model    = ad.model?.model || "";
-  const modelAdd = ad.model?.model_add || "";
+  const series = ad.model?.series || "";
+  const model = ad.model?.model || "";
+  const model_add = ad.model?.model_add || "";
 
-  const nameParts = [producer, series, model].filter(Boolean);
-  const name = nameParts.join(" ").trim();
+  // Name OHNE model_add (damit die ID der "Unterscheider" ist)
+  const baseNameParts = [producer, series, model].filter(Boolean);
+  const baseName =
+    baseNameParts.join(" ").trim() || `Fahrzeug ${vehicleId || "unbekannt"}`;
 
-  // Wenn Name leer → Fallback
-  const finalName = name || `Fahrzeug ${id || "unbekannt"}`;
-
-  // ----------------------------------------------------
-  // 3) Slug generieren
-  // ----------------------------------------------------
-  const slug = id
-    ? `${id}-${slugify(finalName)}`
-    : slugify(finalName);
+  const slugBase = slugify(baseName);
+  const slug = vehicleId ? `${vehicleId}-${slugBase}` : slugBase;
 
   // ----------------------------------------------------
-  // 4) Hauptbild + Galerie
+  // 3) Weitere Felder (einfach Strings draus machen)
   // ----------------------------------------------------
-  const images = Array.isArray(ad.media)
-    ? ad.media.filter(m => m.group === "image" && m.id)
-    : [];
+  const fahrzeugart = ad.type || "";
+  const fahrzeugtyp = ad.typeof || "";
+  const zustand = ad.condition || "";
 
-  // URL-Format Syscara:
-  // https://api.syscara.com/media/<ID>
-  const imageUrl = imgId =>
-    `https://api.syscara.com/media/${imgId}`;
+  const baujahr = ad.model?.modelyear
+    ? String(ad.model.modelyear)
+    : "";
 
-  const hauptbild = images[0] ? imageUrl(images[0].id) : "";
+  const kilometer = ad.mileage != null && ad.mileage !== 0
+    ? String(ad.mileage)
+    : "";
 
-  const galerie = images.slice(0, 25).map(m => imageUrl(m.id));
+  const preis = ad.prices?.offer != null
+    ? String(ad.prices.offer)
+    : "";
+
+  const breite = ad.dimensions?.width != null
+    ? String(ad.dimensions.width)
+    : "";
+
+  const hoehe = ad.dimensions?.height != null
+    ? String(ad.dimensions.height)
+    : "";
+
+  const laenge = ad.dimensions?.length != null
+    ? String(ad.dimensions.length)
+    : "";
 
   // ----------------------------------------------------
-  // 5) Rückgabe der Webflow-kompatiblen Struktur
+  // 4) MEDIA-IDS SAMMELN & media-cache bauen (Version A)
+  //    → wir speichern NUR IDs, keine URLs!
+  // ----------------------------------------------------
+  const media = Array.isArray(ad.media) ? ad.media : [];
+
+  // Nur echte Bilder (group === "image")
+  const imageIds = media
+    .filter((m) => m && m.group === "image" && m.id != null)
+    .map((m) => m.id);
+
+  const mainImageId = imageIds.length > 0 ? imageIds[0] : null;
+
+  const mediaCacheObject = {
+    hauptbild: mainImageId,
+    galerie: imageIds,
+  };
+
+  const mediaCacheJson = JSON.stringify(mediaCacheObject);
+
+  // ----------------------------------------------------
+  // 5) Mapping für Webflow zurückgeben
+  //    Bilderfelder lassen wir VORERST LEER / UNBENUTZT,
+  //    bis wir saubere öffentliche URLs / Proxy haben.
   // ----------------------------------------------------
   return {
-    // Pflichtfelder
-    name: finalName,
+    name: baseName,
     slug,
+    "fahrzeug-id": vehicleId,
 
-    // Deine Webflow-Felder
-    "fahrzeug-id": id,
     hersteller: producer,
     serie: series,
     modell: model,
-    "modell-zusatz": modelAdd,
+    "modell-zusatz": model_add,
 
-    fahrzeugart: ad.type || "",
-    fahrzeugtyp: ad.typeof || "",
-    zustand: ad.condition || "",
+    fahrzeugart,
+    fahrzeugtyp,
+    zustand,
+    baujahr,
+    kilometer,
+    preis,
+    breite,
+    hoehe,
+    laenge,
 
-    baujahr: ad.model?.modelyear
-      ? String(ad.model.modelyear)
-      : "",
+    // Nur Cache-Feld – hier liegen die Syscara-IDs drin:
+    "media-cache": mediaCacheJson,
 
-    kilometer: ad.mileage
-      ? String(ad.mileage)
-      : "",
-
-    preis: ad.prices?.offer
-      ? String(ad.prices.offer)
-      : "",
-
-    breite: ad.dimensions?.width
-      ? String(ad.dimensions.width)
-      : "",
-
-    hoehe: ad.dimensions?.height
-      ? String(ad.dimensions.height)
-      : "",
-
-    laenge: ad.dimensions?.length
-      ? String(ad.dimensions.length)
-      : "",
-
-    hauptbild,
-    galerie
+    // WICHTIG:
+    // hauptbild & galerie NICHT setzen, damit Webflow
+    // keine kaputten Remote-URLs laden will.
+    // Wenn wir später einen Bild-Proxy gebaut haben,
+    // füllen wir diese Felder auf Basis von media-cache.
+    // hauptbild: null,
+    // galerie: [],
   };
 }
 
