@@ -1,34 +1,43 @@
 export default async function handler(req, res) {
   try {
-    const response = await fetch(`${process.env.SYSCARA_API}/sale/ads`, {
-      headers: {
-        Authorization: `Basic ${Buffer.from(
-          `${process.env.SYSCARA_USER}:${process.env.SYSCARA_PASS}`
-        ).toString("base64")}`,
-      },
+    const baseUrl = "https://api.syscara.com";
+
+    // Basic Auth aus deinen Vercel-Variablen
+    const auth = Buffer
+      .from(`${process.env.SYS_API_USER}:${process.env.SYS_API_PASS}`)
+      .toString("base64");
+
+    // Call zum Syscara Endpoint /sale/ads/
+    const response = await fetch(`${baseUrl}/sale/ads/`, {
+      headers: { Authorization: `Basic ${auth}` },
     });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Syscara error ${response.status}: ${text}`);
+    }
 
     const data = await response.json();
 
-    // NUR EIN FAHRZEUG ZURÜCKGEBEN → Browser stürzt nicht ab
+    // Nur das erste Inserat zurückgeben (Browser stürzt sonst ab)
     const firstKey = Object.keys(data)[0];
-    const firstVehicle = data[firstKey];
+    const ad = data[firstKey];
 
-    // Nur minimalen Test-Output zurückgeben
-    res.setHeader("Content-Type", "application/json");
     res.status(200).json({
-      id: firstVehicle.id,
-      name: firstVehicle.model?.producer + " " +
-            firstVehicle.model?.series + " " +
-            firstVehicle.model?.model,
-      type: firstVehicle.type,
-      condition: firstVehicle.condition,
-      location: firstVehicle.location?.name,
-      firstImageId: firstVehicle.media?.[0]?.id ?? null,
-      mediaCount: firstVehicle.media?.length ?? 0
+      id: ad.id,
+      name: [
+        ad.model?.producer,
+        ad.model?.series,
+        ad.model?.model
+      ].filter(Boolean).join(" "),
+      type: ad.type,
+      condition: ad.condition,
+      location: ad.location?.name ?? null,
+      firstImageId: ad.media?.find((m) => m.group === "image")?.id ?? null,
+      mediaCount: ad.media?.length ?? 0,
     });
 
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 }
