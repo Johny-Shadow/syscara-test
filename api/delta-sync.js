@@ -176,11 +176,19 @@ export default async function handler(req, res) {
         }
 
         if (!dryRun) {
+          // PATCH
           await wf(
-            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}?live=true`,
+            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}`,
             "PATCH",
             WEBFLOW_TOKEN,
             { fieldData: mapped }
+          );
+
+          // 🔥 PUBLISH
+          await wf(
+            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}/publish`,
+            "POST",
+            WEBFLOW_TOKEN
           );
         }
 
@@ -189,13 +197,23 @@ export default async function handler(req, res) {
       // -------- CREATE
       else {
         if (!dryRun) {
-          await wf(
-            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items?live=true`,
+          const createdItem = await wf(
+            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items`,
             "POST",
             WEBFLOW_TOKEN,
             { items: [{ fieldData: mapped }] }
           );
+
+          const newId = createdItem.items[0].id;
+
+          // 🔥 PUBLISH
+          await wf(
+            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${newId}/publish`,
+            "POST",
+            WEBFLOW_TOKEN
+          );
         }
+
         created++;
       }
     }
