@@ -88,7 +88,20 @@ export function mapVehicle(ad) {
     : "";
 
   // ------------------------------------------------
-  // 6) Texte
+  // 6) TECHNIK ✅ NEU
+  // ------------------------------------------------
+  const ps =
+    ad.engine?.ps != null ? String(ad.engine.ps) : "";
+
+  const kw =
+    ad.engine?.kw != null ? String(ad.engine.kw) : "";
+
+  const kraftstoff = ad.engine?.fuel || "";
+
+  const getriebe = ad.engine?.gear || "";
+
+  // ------------------------------------------------
+  // 7) Texte
   // ------------------------------------------------
   const beschreibung =
     ad.texts?.description ||
@@ -96,20 +109,20 @@ export function mapVehicle(ad) {
     "";
 
   // ------------------------------------------------
-  // 7) Verkauf / Miete
+  // 8) Verkauf / Miete
   // ------------------------------------------------
   const verkaufMiete =
     ad.category === "Rent" ? "miete" : "verkauf";
 
   // ------------------------------------------------
-  // 8) Geräte-ID (zusätzlich zur Fahrzeug-ID)
+  // 9) Geräte-ID
   // ------------------------------------------------
   const geraetId = ad.identifier?.internal
     ? String(ad.identifier.internal)
     : "";
 
   // ------------------------------------------------
-  // 9) Features → SLUGS
+  // 10) Features → SLUGS
   // ------------------------------------------------
   const features = Array.isArray(ad.features) ? ad.features : [];
 
@@ -118,7 +131,7 @@ export function mapVehicle(ad) {
   );
 
   // ------------------------------------------------
-  // 10) Media-Cache (IDs only)
+  // 11) Media-Cache
   // ------------------------------------------------
   const media = Array.isArray(ad.media) ? ad.media : [];
 
@@ -137,7 +150,7 @@ export function mapVehicle(ad) {
   });
 
   // ------------------------------------------------
-  // 11) RÜCKGABE – ALLES DRIN
+  // 12) RÜCKGABE
   // ------------------------------------------------
   return {
     name,
@@ -165,6 +178,12 @@ export function mapVehicle(ad) {
     schlafplatz,
     bett,
     sitzgruppe,
+
+    // ✅ Technik
+    ps,
+    kw,
+    kraftstoff,
+    getriebe,
 
     beschreibung,
 
