@@ -9,96 +9,86 @@ function slugify(str) {
     .replace(/(^-|-$)+/g, "");
 }
 
+function hasFeature(features, key) {
+  return Array.isArray(features) && features.includes(key) ? "true" : "";
+}
+
 export function mapVehicle(ad) {
-  // ----------------------------------------------------
-  // 1) Objekt normalisieren
-  // ----------------------------------------------------
-  let vehicleId = null;
+  // -------------------------------
+  // 1) Fahrzeug normalisieren
+  // -------------------------------
+  let vehicleId = ad?.id ? String(ad.id) : "";
 
-  if (typeof ad === "object" && ad !== null && !ad.id) {
-    const keys = Object.keys(ad);
-    if (keys.length > 0) {
-      vehicleId = keys[0];
-      ad = ad[vehicleId];
-    }
-  } else {
-    vehicleId = ad.id;
-  }
-
-  vehicleId = vehicleId ? String(vehicleId) : "";
-
-  // ----------------------------------------------------
+  // -------------------------------
   // 2) Name & Slug
-  // ----------------------------------------------------
+  // -------------------------------
   const producer = ad.model?.producer || "";
   const series = ad.model?.series || "";
   const model = ad.model?.model || "";
 
   const baseName =
-    [producer, series, model].filter(Boolean).join(" ").trim() ||
+    [producer, series, model].filter(Boolean).join(" ") ||
     `Fahrzeug ${vehicleId || "unbekannt"}`;
 
   const slug = vehicleId
     ? `${vehicleId}-${slugify(baseName)}`
     : slugify(baseName);
 
-  // ----------------------------------------------------
+  // -------------------------------
   // 3) Basisdaten
-  // ----------------------------------------------------
-  const mapped = {
+  // -------------------------------
+  const verkaufMiete = ad.category === "Rent" ? "miete" : "verkauf";
+
+  const gesamtmasse =
+    ad.weights?.total != null ? String(ad.weights.total) : "";
+
+  const erstzulassung = ad.date?.registration || "";
+
+  const schlafplatz =
+    ad.beds?.num != null ? String(ad.beds.num) : "";
+
+  const bett = Array.isArray(ad.beds?.beds)
+    ? ad.beds.beds.map((b) => b.type).join(", ")
+    : "";
+
+  const sitzgruppe = Array.isArray(ad.seating?.seatings)
+    ? ad.seating.seatings.map((s) => s.type).join(", ")
+    : "";
+
+  // -------------------------------
+  // 4) Media-IDs sammeln
+  // -------------------------------
+  const media = Array.isArray(ad.media) ? ad.media : [];
+
+  const images = media.filter(
+    (m) => m && m.group === "image" && m.id
+  );
+
+  const grundriss = media.find(
+    (m) => m && m.group === "layout"
+  )?.id || null;
+
+  const mediaCache = JSON.stringify({
+    hauptbild: images[0]?.id || null,
+    galerie: images.map((m) => m.id),
+    grundriss,
+  });
+
+  // -------------------------------
+  // 5) Rückgabe
+  // -------------------------------
+  return {
     name: baseName,
     slug,
     "fahrzeug-id": vehicleId,
 
-    hersteller: producer,
-    serie: series,
-    modell: model,
-    "modell-zusatz": ad.model?.model_add || "",
+    "verkauf-miete": verkaufMiete,
+    gesamtmasse,
+    erstzulassung,
+    schlafplatz,
+    bett,
+    sitzgruppe,
 
-    fahrzeugart: ad.type || "",
-    fahrzeugtyp: ad.typeof || "",
-    zustand: ad.condition || "",
-
-    baujahr: ad.model?.modelyear ? String(ad.model.modelyear) : "",
-    kilometer:
-      ad.mileage != null && ad.mileage !== 0 ? String(ad.mileage) : "",
-    preis: ad.prices?.offer != null ? String(ad.prices.offer) : "",
-
-    breite: ad.dimensions?.width ? String(ad.dimensions.width) : "",
-    hoehe: ad.dimensions?.height ? String(ad.dimensions.height) : "",
-    laenge: ad.dimensions?.length ? String(ad.dimensions.length) : "",
-
-    ps: ad.engine?.ps != null ? String(ad.engine.ps) : "",
-    kw: ad.engine?.kw != null ? String(ad.engine.kw) : "",
-    kraftstoff: ad.engine?.fuel || "",
-    getriebe: ad.engine?.gear || "",
-
-    beschreibung: ad.texts?.description || "",
-
-    "geraet-id": ad.identifier?.internal
-      ? String(ad.identifier.internal)
-      : "",
-
-    // 👇 WICHTIG: HIER NUR FEATURE-SLUGS
-    featureSlugs: Array.isArray(ad.features)
-      ? ad.features.map((f) =>
-          slugify(f.replace(/_/g, " "))
-        )
-      : [],
+    "media-cache": mediaCache,
   };
-
-  // ----------------------------------------------------
-  // 4) Media Cache (IDs only)
-  // ----------------------------------------------------
-  const media = Array.isArray(ad.media) ? ad.media : [];
-  const imageIds = media
-    .filter((m) => m && m.group === "image" && m.id != null)
-    .map((m) => m.id);
-
-  mapped["media-cache"] = JSON.stringify({
-    hauptbild: imageIds[0] || null,
-    galerie: imageIds,
-  });
-
-  return mapped;
 }
