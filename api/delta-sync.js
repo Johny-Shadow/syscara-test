@@ -23,7 +23,7 @@ async function wf(url, method, token, body) {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": body ? "application/json" : undefined,
+      ...(body ? { "Content-Type": "application/json" } : {}),
       accept: "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -131,91 +131,97 @@ export default async function handler(req, res) {
     let updated = 0;
     let skipped = 0;
     let deleted = 0;
+    const errors = [];
 
     // ------------------------------------------------
-    // 4) CREATE / UPDATE
+    // 4) CREATE / UPDATE (STABIL)
     // ------------------------------------------------
     for (const ad of batch) {
-      const mapped = mapVehicle(ad);
+      try {
+        const mapped = mapVehicle(ad);
 
-      // 🖼️ Media
-      if (mapped["media-cache"]) {
-        const cache = JSON.parse(mapped["media-cache"]);
+        // 🖼️ Media
+        if (mapped["media-cache"]) {
+          const cache = JSON.parse(mapped["media-cache"]);
 
-        if (cache.hauptbild)
-          mapped.hauptbild = `${origin}/api/media?id=${cache.hauptbild}`;
+          if (cache.hauptbild)
+            mapped.hauptbild = `${origin}/api/media?id=${cache.hauptbild}`;
 
-        if (Array.isArray(cache.galerie))
-          mapped.galerie = cache.galerie
-            .slice(0, 25)
-            .map((id) => `${origin}/api/media?id=${id}`);
+          if (Array.isArray(cache.galerie))
+            mapped.galerie = cache.galerie
+              .slice(0, 25)
+              .map((id) => `${origin}/api/media?id=${id}`);
 
-        if (cache.grundriss)
-          mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
-      }
-
-      // 🔗 Features
-      const featureIds = (mapped.featureSlugs || [])
-        .map((slug) => featureMap[slug])
-        .filter(Boolean);
-
-      delete mapped.featureSlugs;
-      mapped.features = featureIds;
-
-      // 🔐 Change Detection
-      const hash = createHash(mapped);
-      mapped["sync-hash"] = hash;
-
-      const existing = wfMap.get(mapped["fahrzeug-id"]);
-
-      // -------- UPDATE
-      if (existing) {
-        if (existing.fieldData?.["sync-hash"] === hash) {
-          skipped++;
-          continue;
+          if (cache.grundriss)
+            mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
         }
 
-        if (!dryRun) {
-          await wf(
-            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}`,
-            "PATCH",
-            WEBFLOW_TOKEN,
-            { fieldData: mapped }
-          );
+        // 🔗 Features
+        const featureIds = (mapped.featureSlugs || [])
+          .map((slug) => featureMap[slug])
+          .filter(Boolean);
 
-          // ✅ PUBLISH (STAGING)
-          await wf(
-            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}/publish`,
-            "POST",
-            WEBFLOW_TOKEN,
-            { publishToDomains: ["staging"] }
-          );
+        delete mapped.featureSlugs;
+        mapped.features = featureIds;
+
+        // 🔐 Hash
+        const hash = createHash(mapped);
+        mapped["sync-hash"] = hash;
+
+        const existing = wfMap.get(mapped["fahrzeug-id"]);
+
+        // -------- UPDATE
+        if (existing) {
+          if (existing.fieldData?.["sync-hash"] === hash) {
+            skipped++;
+            continue;
+          }
+
+          if (!dryRun) {
+            await wf(
+              `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}`,
+              "PATCH",
+              WEBFLOW_TOKEN,
+              { fieldData: mapped }
+            );
+
+            await wf(
+              `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}/publish`,
+              "POST",
+              WEBFLOW_TOKEN,
+              { publishToDomains: ["staging"] }
+            );
+          }
+
+          updated++;
         }
+        // -------- CREATE
+        else {
+          if (!dryRun) {
+            const createdItem = await wf(
+              `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items`,
+              "POST",
+              WEBFLOW_TOKEN,
+              { items: [{ fieldData: mapped }] }
+            );
 
-        updated++;
-      }
-      // -------- CREATE
-      else {
-        if (!dryRun) {
-          const createdItem = await wf(
-            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items`,
-            "POST",
-            WEBFLOW_TOKEN,
-            { items: [{ fieldData: mapped }] }
-          );
+            const newId = createdItem.items[0].id;
 
-          const newId = createdItem.items[0].id;
+            await wf(
+              `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${newId}/publish`,
+              "POST",
+              WEBFLOW_TOKEN,
+              { publishToDomains: ["staging"] }
+            );
+          }
 
-          // ✅ PUBLISH (STAGING)
-          await wf(
-            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${newId}/publish`,
-            "POST",
-            WEBFLOW_TOKEN,
-            { publishToDomains: ["staging"] }
-          );
+          created++;
         }
-
-        created++;
+      } catch (e) {
+        errors.push({
+          syscaraId: ad?.id || null,
+          error: e,
+        });
       }
     }
 
@@ -248,10 +254,12 @@ export default async function handler(req, res) {
       updated,
       skipped,
       deleted,
+      errors, // 🔥 extrem wichtig
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: String(err) });
+    return res.status(500).json({
+      error: err?.message || err,
+    });
   }
 }
-
