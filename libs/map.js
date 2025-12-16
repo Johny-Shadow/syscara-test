@@ -9,19 +9,42 @@ function slugify(str) {
     .replace(/(^-|-$)+/g, "");
 }
 
-function hasFeature(features, key) {
-  return Array.isArray(features) && features.includes(key) ? "true" : "";
+// --------------------------------------------------
+// 🔑 WICHTIG: Syscara-Antwort normalisieren
+// --------------------------------------------------
+function normalizeSyscaraAd(input) {
+  if (!input || typeof input !== "object") return {};
+
+  // Variante C: { RESULT, DATA: { "135965": {...} } }
+  if (input.DATA && typeof input.DATA === "object") {
+    const keys = Object.keys(input.DATA);
+    if (keys.length === 1) {
+      return input.DATA[keys[0]];
+    }
+  }
+
+  // Variante B: { "135965": {...} }
+  if (!input.id) {
+    const keys = Object.keys(input);
+    if (keys.length === 1 && typeof input[keys[0]] === "object") {
+      return input[keys[0]];
+    }
+  }
+
+  // Variante A: direktes Fahrzeug
+  return input;
 }
 
-export function mapVehicle(ad) {
-  // -------------------------------
-  // 1) Fahrzeug normalisieren
-  // -------------------------------
-  let vehicleId = ad?.id ? String(ad.id) : "";
+// --------------------------------------------------
+export function mapVehicle(rawAd) {
+  // 🔹 1) NORMALISIEREN (DAS WAR DER FEHLER)
+  const ad = normalizeSyscaraAd(rawAd);
 
-  // -------------------------------
+  const vehicleId = ad?.id ? String(ad.id) : "";
+
+  // ------------------------------------------------
   // 2) Name & Slug
-  // -------------------------------
+  // ------------------------------------------------
   const producer = ad.model?.producer || "";
   const series = ad.model?.series || "";
   const model = ad.model?.model || "";
@@ -34,11 +57,14 @@ export function mapVehicle(ad) {
     ? `${vehicleId}-${slugify(baseName)}`
     : slugify(baseName);
 
-  // -------------------------------
-  // 3) Basisdaten
-  // -------------------------------
+  // ------------------------------------------------
+  // 3) Verkaufsart
+  // ------------------------------------------------
   const verkaufMiete = ad.category === "Rent" ? "miete" : "verkauf";
 
+  // ------------------------------------------------
+  // 4) Zusatzdaten
+  // ------------------------------------------------
   const gesamtmasse =
     ad.weights?.total != null ? String(ad.weights.total) : "";
 
@@ -55,18 +81,17 @@ export function mapVehicle(ad) {
     ? ad.seating.seatings.map((s) => s.type).join(", ")
     : "";
 
-  // -------------------------------
-  // 4) Media-IDs sammeln
-  // -------------------------------
+  // ------------------------------------------------
+  // 5) Media-IDs (Cache)
+  // ------------------------------------------------
   const media = Array.isArray(ad.media) ? ad.media : [];
 
   const images = media.filter(
     (m) => m && m.group === "image" && m.id
   );
 
-  const grundriss = media.find(
-    (m) => m && m.group === "layout"
-  )?.id || null;
+  const grundriss =
+    media.find((m) => m && m.group === "layout")?.id || null;
 
   const mediaCache = JSON.stringify({
     hauptbild: images[0]?.id || null,
@@ -74,9 +99,9 @@ export function mapVehicle(ad) {
     grundriss,
   });
 
-  // -------------------------------
-  // 5) Rückgabe
-  // -------------------------------
+  // ------------------------------------------------
+  // 6) Rückgabe
+  // ------------------------------------------------
   return {
     name: baseName,
     slug,
@@ -92,3 +117,4 @@ export function mapVehicle(ad) {
     "media-cache": mediaCache,
   };
 }
+
