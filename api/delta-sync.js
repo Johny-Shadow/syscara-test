@@ -35,6 +35,17 @@ async function wf(url, method, token, body) {
 }
 
 /* ----------------------------------------------------
+   LIVE UNPUBLISH (Item aus Live entfernen)
+---------------------------------------------------- */
+async function unpublishLiveItem(collectionId, itemId, token) {
+  return wf(
+    `${WEBFLOW_BASE}/collections/${collectionId}/items/${itemId}/live`,
+    "DELETE",
+    token
+  );
+}
+
+/* ----------------------------------------------------
    ORIGIN (für Media Proxy)
 ---------------------------------------------------- */
 function getOrigin(req) {
@@ -101,7 +112,7 @@ export default async function handler(req, res) {
     const dryRun = req.query.dry === "1";
 
     /* ----------------------------------------------
-       SYSCARA FETCH (alle Fahrzeuge)
+       SYSCARA FETCH
     ---------------------------------------------- */
     const auth =
       "Basic " +
@@ -122,7 +133,7 @@ export default async function handler(req, res) {
     }
 
     /* ----------------------------------------------
-       WEBFLOW ITEMS (alle Items)
+       WEBFLOW ITEMS
     ---------------------------------------------- */
     const wfMap = new Map();
     let wfOffset = 0;
@@ -166,7 +177,6 @@ export default async function handler(req, res) {
       try {
         const mapped = mapVehicle(ad);
 
-        // MEDIA
         if (mapped["media-cache"]) {
           const cache = JSON.parse(mapped["media-cache"]);
 
@@ -182,7 +192,6 @@ export default async function handler(req, res) {
             mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
         }
 
-        // FEATURES
         const featureIds = (mapped.featureSlugs || [])
           .map((slug) => featureMap[slug])
           .filter(Boolean);
@@ -190,13 +199,11 @@ export default async function handler(req, res) {
         delete mapped.featureSlugs;
         mapped.features = featureIds;
 
-        // HASH
         const hash = createHash(mapped);
         mapped["sync-hash"] = hash;
 
         const existing = wfMap.get(mapped["fahrzeug-id"]);
 
-        /* ---------- UPDATE ---------- */
         if (existing) {
           if (existing.fieldData?.["sync-hash"] === hash) {
             skipped++;
@@ -208,11 +215,7 @@ export default async function handler(req, res) {
               `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}`,
               "PATCH",
               WEBFLOW_TOKEN,
-              {
-                isDraft: false,
-                isArchived: false,
-                fieldData: mapped,
-              }
+              { isDraft: false, isArchived: false, fieldData: mapped }
             );
 
             await publishItem(
@@ -223,20 +226,13 @@ export default async function handler(req, res) {
           }
 
           updated++;
-        }
-
-        /* ---------- CREATE ---------- */
-        else {
+        } else {
           if (!dryRun) {
             const createdItem = await wf(
               `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items`,
               "POST",
               WEBFLOW_TOKEN,
-              {
-                isDraft: false,
-                isArchived: false,
-                fieldData: mapped,
-              }
+              { isDraft: false, isArchived: false, fieldData: mapped }
             );
 
             await publishItem(
@@ -249,26 +245,35 @@ export default async function handler(req, res) {
           created++;
         }
       } catch (e) {
-        errors.push({
-          syscaraId: ad?.id || null,
-          error: e,
-        });
+        errors.push({ syscaraId: ad?.id || null, error: e });
       }
     }
 
     /* ----------------------------------------------
-       DELETE
+       DELETE (Live-Unpublish → CMS-Delete)
     ---------------------------------------------- */
     for (const [fid, item] of wfMap.entries()) {
       if (!sysMap.has(fid)) {
-        if (!dryRun) {
-          await wf(
-            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${item.id}`,
-            "DELETE",
-            WEBFLOW_TOKEN
-          );
+        try {
+          if (!dryRun) {
+            // 1) sofort von Live entfernen
+            await unpublishLiveItem(
+              WEBFLOW_COLLECTION,
+              item.id,
+              WEBFLOW_TOKEN
+            );
+
+            // 2) danach endgültig löschen
+            await wf(
+              `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${item.id}`,
+              "DELETE",
+              WEBFLOW_TOKEN
+            );
+          }
+          deleted++;
+        } catch (e) {
+          errors.push({ syscaraId: fid, error: e });
         }
-        deleted++;
       }
     }
 
