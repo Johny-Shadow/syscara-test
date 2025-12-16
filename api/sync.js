@@ -74,24 +74,49 @@ export default async function handler(req, res) {
 
     const ad = await sysRes.json();
 
-    // 🔹 Mapping
+    // 🔹 Mapping (unverändert)
     const mapped = mapVehicle(ad);
 
-    // 🔹 Feature-Matching
+    // ------------------------------------------------
+    // 🖼️ BILDER AUS media-cache ERGÄNZEN
+    // ------------------------------------------------
+    if (mapped["media-cache"]) {
+      const mediaCache = JSON.parse(mapped["media-cache"]);
+      const origin = `https://${req.headers.host}`;
+
+      if (mediaCache.hauptbild) {
+        mapped.hauptbild = `${origin}/api/media?id=${mediaCache.hauptbild}`;
+      }
+
+      if (Array.isArray(mediaCache.galerie)) {
+        mapped.galerie = mediaCache.galerie
+          .slice(0, 25)
+          .map((id) => `${origin}/api/media?id=${id}`);
+      }
+
+      if (mediaCache.grundriss) {
+        mapped.grundriss = `${origin}/api/media?id=${mediaCache.grundriss}`;
+      }
+    }
+
+    // ------------------------------------------------
+    // 🔹 Feature-Matching (unverändert)
+    // ------------------------------------------------
     const featureMap = await getFeatureMap(
       WEBFLOW_TOKEN,
       WEBFLOW_FEATURES_COLLECTION
     );
 
-    const featureIds = mapped.featureSlugs
+    const featureIds = (mapped.featureSlugs || [])
       .map((slug) => featureMap[slug])
       .filter(Boolean);
 
     delete mapped.featureSlugs;
-
     mapped.features = featureIds;
 
+    // ------------------------------------------------
     // 🔹 Webflow Create
+    // ------------------------------------------------
     const body = {
       items: [
         {
@@ -120,6 +145,11 @@ export default async function handler(req, res) {
       ok: true,
       vehicle: mapped.name,
       featuresLinked: featureIds.length,
+      images: {
+        hauptbild: !!mapped.hauptbild,
+        galerie: mapped.galerie?.length || 0,
+        grundriss: !!mapped.grundriss,
+      },
       webflowItem: wfJson,
     });
   } catch (err) {
@@ -127,4 +157,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err });
   }
 }
-
