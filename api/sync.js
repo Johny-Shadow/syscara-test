@@ -1,11 +1,51 @@
 // pages/api/sync.js
 import { mapVehicle } from "../libs/map.js";
 
+let featureMapCache = null;
+
+// ----------------------------------------------------
+// Webflow Helper
+// ----------------------------------------------------
+async function webflowRequest(url, token) {
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      accept: "application/json",
+    },
+  });
+  const json = await res.json();
+  if (!res.ok) throw json;
+  return json;
+}
+
+// ----------------------------------------------------
+// Feature Map laden (Slug -> ID)
+// ----------------------------------------------------
+async function getFeatureMap(token, collectionId) {
+  if (featureMapCache) return featureMapCache;
+
+  const url = `https://api.webflow.com/v2/collections/${collectionId}/items?limit=1000`;
+  const data = await webflowRequest(url, token);
+
+  const map = {};
+  for (const item of data.items || []) {
+    const slug = item.fieldData?.slug;
+    if (slug) map[slug] = item.id;
+  }
+
+  featureMapCache = map;
+  return map;
+}
+
+// ----------------------------------------------------
+// API Handler
+// ----------------------------------------------------
 export default async function handler(req, res) {
   try {
     const {
       WEBFLOW_TOKEN,
       WEBFLOW_COLLECTION,
+      WEBFLOW_FEATURES_COLLECTION,
       SYS_API_USER,
       SYS_API_PASS,
     } = process.env;
@@ -13,142 +53,78 @@ export default async function handler(req, res) {
     if (
       !WEBFLOW_TOKEN ||
       !WEBFLOW_COLLECTION ||
+      !WEBFLOW_FEATURES_COLLECTION ||
       !SYS_API_USER ||
       !SYS_API_PASS
     ) {
-      return res.status(500).json({
-        error:
-          "Fehlende ENV Variablen (WEBFLOW_TOKEN, WEBFLOW_COLLECTION, SYS_API_USER, SYS_API_PASS)",
-      });
+      return res.status(500).json({ error: "Missing ENV vars" });
     }
 
-    // --------------------------------------------------
-    // 1) Testfahrzeug laden
-    // --------------------------------------------------
+    // 🔹 Testfahrzeug
     const sysId = 135965;
     const sysUrl = `https://api.syscara.com/sale/ads/${sysId}`;
 
-    const sysResponse = await fetch(sysUrl, {
+    const sysRes = await fetch(sysUrl, {
       headers: {
         Authorization:
           "Basic " +
           Buffer.from(`${SYS_API_USER}:${SYS_API_PASS}`).toString("base64"),
-        "Content-Type": "application/json",
       },
     });
 
-    if (!sysResponse.ok) {
-      const text = await sysResponse.text();
-      return res.status(500).json({
-        error: "Syscara Request fehlgeschlagen",
-        details: text,
-      });
-    }
+    const ad = await sysRes.json();
 
-    const ad = await sysResponse.json();
-
-    // --------------------------------------------------
-    // 2) Mapping
-    // --------------------------------------------------
+    // 🔹 Mapping
     const mapped = mapVehicle(ad);
-    console.log("✅ Mapped Vehicle:", mapped);
 
-    // --------------------------------------------------
-    // 3) Media-Cache auslesen
-    // --------------------------------------------------
-    let mediaCache = null;
+    // 🔹 Feature-Matching
+    const featureMap = await getFeatureMap(
+      WEBFLOW_TOKEN,
+      WEBFLOW_FEATURES_COLLECTION
+    );
 
-    try {
-      mediaCache = mapped["media-cache"]
-        ? JSON.parse(mapped["media-cache"])
-        : null;
-    } catch {
-      mediaCache = null;
-    }
+    const featureIds = mapped.featureSlugs
+      .map((slug) => featureMap[slug])
+      .filter(Boolean);
 
-    const origin = req.headers.origin || `https://${req.headers.host}`;
+    delete mapped.featureSlugs;
 
-    // Hauptbild
-    const hauptbildUrl =
-      mediaCache?.hauptbild != null
-        ? `${origin}/api/media?id=${mediaCache.hauptbild}`
-        : null;
+    mapped.features = featureIds;
 
-    // Grundriss
-    const grundrissUrl =
-      mediaCache?.grundriss != null
-        ? `${origin}/api/media?id=${mediaCache.grundriss}`
-        : null;
-
-    // Galerie (max. 25 Bilder)
-    const galerieUrls = Array.isArray(mediaCache?.galerie)
-      ? mediaCache.galerie
-          .slice(0, 25)
-          .map((id) => `${origin}/api/media?id=${id}`)
-      : [];
-
-    console.log("🖼️ Hauptbild:", hauptbildUrl);
-    console.log("📐 Grundriss:", grundrissUrl);
-    console.log("🖼️ Galerie:", galerieUrls.length);
-
-    // --------------------------------------------------
-    // 4) FieldData bauen
-    // --------------------------------------------------
-    const fieldData = {
-      ...mapped,
-      ...(hauptbildUrl ? { hauptbild: hauptbildUrl } : {}),
-      ...(grundrissUrl ? { grundriss: grundrissUrl } : {}),
-      ...(galerieUrls.length > 0 ? { galerie: galerieUrls } : {}),
-    };
-
+    // 🔹 Webflow Create
     const body = {
       items: [
         {
-          fieldData,
+          fieldData: mapped,
         },
       ],
     };
 
-    // --------------------------------------------------
-    // 5) Webflow Request
-    // --------------------------------------------------
-    const wfUrl = `https://api.webflow.com/v2/collections/${WEBFLOW_COLLECTION}/items`;
+    const wfRes = await fetch(
+      `https://api.webflow.com/v2/collections/${WEBFLOW_COLLECTION}/items`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${WEBFLOW_TOKEN}`,
+          "Content-Type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify(body),
+      }
+    );
 
-    const wfResponse = await fetch(wfUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${WEBFLOW_TOKEN}`,
-        "Content-Type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    const wfJson = await wfRes.json();
+    if (!wfRes.ok) throw wfJson;
 
-    const wfJson = await wfResponse.json();
-
-    if (!wfResponse.ok) {
-      console.error("Webflow Error:", wfJson);
-      return res.status(500).json({
-        error: "Webflow API error",
-        details: wfJson,
-      });
-    }
-
-    // --------------------------------------------------
-    // 6) Erfolg
-    // --------------------------------------------------
     return res.status(200).json({
       ok: true,
-      syscaraId: sysId,
-      images: {
-        hauptbild: hauptbildUrl,
-        grundriss: grundrissUrl,
-        galerieCount: galerieUrls.length,
-      },
-      webflowResponse: wfJson,
+      vehicle: mapped.name,
+      featuresLinked: featureIds.length,
+      webflowItem: wfJson,
     });
   } catch (err) {
-    console.error("Unhandled Error:", err);
-    return res.status(500).json({ error: err.message });
+    console.error(err);
+    return res.status(500).json({ error: err });
   }
 }
+
