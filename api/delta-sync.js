@@ -98,12 +98,10 @@ export default async function handler(req, res) {
       SYS_API_PASS,
     } = process.env;
 
-    const limit = Math.min(parseInt(req.query.limit || "25", 10), 25);
-    const offset = parseInt(req.query.offset || "0", 10);
     const dryRun = req.query.dry === "1";
 
     /* ----------------------------------------------
-       SYSCARA FETCH
+       SYSCARA FETCH (alle Fahrzeuge)
     ---------------------------------------------- */
     const auth =
       "Basic " +
@@ -117,7 +115,6 @@ export default async function handler(req, res) {
 
     const sysRaw = await sysRes.json();
     const sysAds = Object.values(sysRaw);
-    const batch = sysAds.slice(offset, offset + limit);
 
     const sysMap = new Map();
     for (const ad of sysAds) {
@@ -125,7 +122,7 @@ export default async function handler(req, res) {
     }
 
     /* ----------------------------------------------
-       WEBFLOW ITEMS (paginiert!)
+       WEBFLOW ITEMS (alle Items)
     ---------------------------------------------- */
     const wfMap = new Map();
     let wfOffset = 0;
@@ -165,7 +162,7 @@ export default async function handler(req, res) {
     /* ----------------------------------------------
        CREATE / UPDATE
     ---------------------------------------------- */
-    for (const ad of batch) {
+    for (const ad of sysAds) {
       try {
         const mapped = mapVehicle(ad);
 
@@ -281,7 +278,6 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       dryRun,
-      batch: { limit, offset },
       syscaraTotal: sysAds.length,
       webflowTotal: wfMap.size,
       created,
