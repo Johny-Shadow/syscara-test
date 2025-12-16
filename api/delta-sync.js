@@ -84,7 +84,7 @@ export default async function handler(req, res) {
     // ------------------------------------------------
     // 1) Alle Syscara Ads laden
     // ------------------------------------------------
-    const sysRes = await fetch("https://api.syscara.com/sale/ads", {
+    const sysRes = await fetch("https://api.syscara.com/sale/ads/", {
       headers: { Authorization: auth },
     });
 
