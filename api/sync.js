@@ -75,10 +75,16 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Syscara error" });
     }
 
-    const rawAd = await sysRes.json();
+   const rawAd = await sysRes.json();
 
-    // ✅ EINZIGE WAHRHEIT
-    const mapped = mapVehicle(rawAd);
+// 🔥 WICHTIG: echtes Fahrzeug extrahieren
+const ad =
+  rawAd && typeof rawAd === "object" && rawAd[sysId]
+    ? rawAd[sysId]
+    : rawAd;
+
+const mapped = mapVehicle(ad);
+
 
     // ------------------------------------------------
     // 🖼️ Bilder aus media-cache
