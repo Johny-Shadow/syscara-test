@@ -20,7 +20,7 @@ async function webflowRequest(url, token) {
 }
 
 // ----------------------------------------------------
-// Feature Map laden (Slug -> ID)
+// Feature Map laden
 // ----------------------------------------------------
 async function getFeatureMap(token, collectionId) {
   if (featureMapCache) return featureMapCache;
@@ -38,8 +38,6 @@ async function getFeatureMap(token, collectionId) {
   return map;
 }
 
-// ----------------------------------------------------
-// Helper: Origin sauber bauen (Vercel / Proxies)
 // ----------------------------------------------------
 function getOrigin(req) {
   const proto = req.headers["x-forwarded-proto"] || "https";
@@ -60,76 +58,53 @@ export default async function handler(req, res) {
       SYS_API_PASS,
     } = process.env;
 
-    if (
-      !WEBFLOW_TOKEN ||
-      !WEBFLOW_COLLECTION ||
-      !WEBFLOW_FEATURES_COLLECTION ||
-      !SYS_API_USER ||
-      !SYS_API_PASS
-    ) {
-      return res.status(500).json({ error: "Missing ENV vars" });
-    }
-
-    // 🔹 Testfahrzeug
+    // 🔹 Syscara laden
     const sysId = 135965;
-    const sysUrl = `https://api.syscara.com/sale/ads/${sysId}`;
+    const sysRes = await fetch(
+      `https://api.syscara.com/sale/ads/${sysId}`,
+      {
+        headers: {
+          Authorization:
+            "Basic " +
+            Buffer.from(`${SYS_API_USER}:${SYS_API_PASS}`).toString("base64"),
+        },
+      }
+    );
 
-    const sysRes = await fetch(sysUrl, {
-      headers: {
-        Authorization:
-          "Basic " +
-          Buffer.from(`${SYS_API_USER}:${SYS_API_PASS}`).toString("base64"),
-        "Content-Type": "application/json",
-        accept: "application/json",
-      },
-    });
-
-    // ✅ WICHTIG: Wenn Syscara nicht OK liefert, sofort abbrechen
     if (!sysRes.ok) {
-      const text = await sysRes.text();
-      console.error("Syscara error:", sysRes.status, text);
-      return res.status(500).json({
-        error: "Syscara Request failed",
-        status: sysRes.status,
-        details: text,
-      });
+      return res.status(500).json({ error: "Syscara error" });
     }
 
-    const ad = await sysRes.json();
+    const rawAd = await sysRes.json();
 
-    // 🔹 Mapping
-    const mapped = mapVehicle(ad);
+    // ✅ EINZIGE WAHRHEIT
+    const mapped = mapVehicle(rawAd);
 
     // ------------------------------------------------
-    // 🖼️ BILDER AUS media-cache ERGÄNZEN (hauptbild/galerie/grundriss)
+    // 🖼️ Bilder aus media-cache
     // ------------------------------------------------
     const origin = getOrigin(req);
 
     if (mapped["media-cache"]) {
-      let mediaCache = null;
-      try {
-        mediaCache = JSON.parse(mapped["media-cache"]);
-      } catch (e) {
-        console.error("media-cache JSON parse failed:", mapped["media-cache"]);
+      const cache = JSON.parse(mapped["media-cache"]);
+
+      if (cache.hauptbild) {
+        mapped.hauptbild = `${origin}/api/media?id=${cache.hauptbild}`;
       }
 
-      if (mediaCache?.hauptbild) {
-        mapped.hauptbild = `${origin}/api/media?id=${mediaCache.hauptbild}`;
-      }
-
-      if (Array.isArray(mediaCache?.galerie) && mediaCache.galerie.length) {
-        mapped.galerie = mediaCache.galerie
+      if (Array.isArray(cache.galerie)) {
+        mapped.galerie = cache.galerie
           .slice(0, 25)
           .map((id) => `${origin}/api/media?id=${id}`);
       }
 
-      if (mediaCache?.grundriss) {
-        mapped.grundriss = `${origin}/api/media?id=${mediaCache.grundriss}`;
+      if (cache.grundriss) {
+        mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
       }
     }
 
     // ------------------------------------------------
-    // 🔹 Feature-Matching (Slug -> Item-ID)
+    // 🔹 Features verknüpfen
     // ------------------------------------------------
     const featureMap = await getFeatureMap(
       WEBFLOW_TOKEN,
@@ -157,37 +132,26 @@ export default async function handler(req, res) {
         headers: {
           Authorization: `Bearer ${WEBFLOW_TOKEN}`,
           "Content-Type": "application/json",
-          accept: "application/json",
         },
         body: JSON.stringify(body),
       }
     );
 
     const wfJson = await wfRes.json();
-    if (!wfRes.ok) {
-      console.error("Webflow Error:", wfJson);
-      return res.status(500).json({ error: "Webflow API error", details: wfJson });
-    }
+    if (!wfRes.ok) throw wfJson;
 
     return res.status(200).json({
       ok: true,
-      syscaraId: sysId,
       vehicle: mapped.name,
-      featuresLinked: featureIds.length,
       images: {
         hauptbild: !!mapped.hauptbild,
         galerie: mapped.galerie?.length || 0,
         grundriss: !!mapped.grundriss,
       },
-      debug: {
-        origin,
-        hasMediaCache: !!mapped["media-cache"],
-      },
-      webflowItem: wfJson,
+      featuresLinked: featureIds.length,
     });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: err?.message || err });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: e });
   }
 }
-
