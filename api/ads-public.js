@@ -1,102 +1,124 @@
 // pages/api/ads-public.js
 
-function toNumber(val) {
-  const n = Number(val);
-  return Number.isFinite(n) ? n : 0;
-}
-
 export default async function handler(req, res) {
   try {
     const { SYS_API_USER, SYS_API_PASS } = process.env;
 
     if (!SYS_API_USER || !SYS_API_PASS) {
-      return res.status(500).json({
-        error: "Missing ENV vars (SYS_API_USER, SYS_API_PASS)",
-      });
+      return res.status(500).json({ error: "Missing SYS_API_USER / SYS_API_PASS" });
     }
 
     const auth = Buffer.from(`${SYS_API_USER}:${SYS_API_PASS}`).toString("base64");
 
+    // Syscara: komplette Liste
     const response = await fetch("https://api.syscara.com/sale/ads/", {
       headers: { Authorization: `Basic ${auth}` },
     });
 
-    const raw = await response.text();
+    const text = await response.text();
+
     if (!response.ok) {
       return res.status(500).json({
-        error: "Syscara error",
+        error: "Syscara returned an error",
         status: response.status,
-        raw,
+        message: text,
       });
     }
 
-    const data = JSON.parse(raw);
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      return res.status(500).json({ error: "Invalid JSON from Syscara", raw: text });
+    }
 
-    // Syscara liefert { "135965": {...}, ... }
-    const all = Object.entries(data).map(([key, ad]) => ({
-      id: ad?.id ?? Number(key),
-      ...ad,
-    }));
+    const allowedTypes = new Set(["Reisemobil", "Caravan"]);
 
-    const included = [];
+    let totalVehicles = 0;
+    let publicVehicles = 0;
+    let reisemobile = 0;
+    let caravans = 0;
+
     const excludedReasons = {
       not_visible: 0,
+      not_market: 0,
       wrong_type: 0,
       no_price: 0,
     };
 
-    for (const ad of all) {
-      // ✅ 1. Sichtbarkeit (NEU)
-      if (ad.visible !== true) {
-        excludedReasons.not_visible++;
+    const sampleIncluded = [];
+    const sampleExcluded = [];
+
+    // data ist bei euch i.d.R. ein Objekt { "135965": { ... }, ... }
+    for (const [key, raw] of Object.entries(data || {})) {
+      totalVehicles++;
+
+      // normalize: ID aus key nehmen, falls raw.id fehlt
+      const ad = raw && typeof raw === "object" ? raw : {};
+      const id = ad.id ?? Number(key) ?? key;
+
+      const type = ad.type || "";
+      const visible = ad.properties?.visible === true;
+      const market = ad.properties?.market === true;
+
+      const offer = ad.prices?.offer;
+      const hasPrice = offer != null && String(offer) !== "" && Number(offer) > 0;
+
+      // Filterlogik
+      let reason = null;
+      if (!visible) reason = "not_visible";
+      else if (!market) reason = "not_market";
+      else if (!allowedTypes.has(type)) reason = "wrong_type";
+      else if (!hasPrice) reason = "no_price";
+
+      if (reason) {
+        excludedReasons[reason]++;
+
+        if (sampleExcluded.length < 10) {
+          sampleExcluded.push({
+            id,
+            status: ad.status,
+            type,
+            visible,
+            market,
+            offer: offer ?? null,
+            reason,
+          });
+        }
         continue;
       }
 
-      // ✅ 2. Fahrzeugtyp
-      if (ad.type !== "Reisemobil" && ad.type !== "Caravan") {
-        excludedReasons.wrong_type++;
-        continue;
+      // included
+      publicVehicles++;
+      if (type === "Reisemobil") reisemobile++;
+      if (type === "Caravan") caravans++;
+
+      if (sampleIncluded.length < 10) {
+        sampleIncluded.push({
+          id,
+          status: ad.status,
+          type,
+          visible,
+          market,
+          producer: ad.model?.producer || "",
+          series: ad.model?.series || "",
+          model: ad.model?.model || "",
+          offer: offer ?? null,
+        });
       }
-
-      // ✅ 3. Preis (Verkauf ODER Miete)
-      const offer = toNumber(ad?.prices?.offer);
-      const rent = toNumber(ad?.prices?.rent);
-
-      if (offer <= 0 && rent <= 0) {
-        excludedReasons.no_price++;
-        continue;
-      }
-
-      included.push(ad);
     }
 
-    const reisemobile = included.filter((a) => a.type === "Reisemobil").length;
-    const caravans = included.filter((a) => a.type === "Caravan").length;
-
     return res.status(200).json({
-      totalVehicles: all.length,
-      publicVehicles: included.length,
+      totalVehicles,
+      publicVehicles,
       reisemobile,
       caravans,
-      excluded: all.length - included.length,
+      excluded: totalVehicles - publicVehicles,
       excludedReasons,
-      sampleIncluded: included.slice(0, 10).map((a) => ({
-        id: a.id,
-        visible: a.visible,
-        status: a.status,
-        type: a.type,
-        producer: a.model?.producer,
-        series: a.model?.series,
-        model: a.model?.model,
-        offer: a.prices?.offer ?? null,
-        rent: a.prices?.rent ?? null,
-      })),
+      sampleIncluded,
+      sampleExcluded,
     });
   } catch (err) {
-    return res.status(500).json({
-      error: "Server error",
-      details: err.message,
-    });
+    return res.status(500).json({ error: "Server error", details: err.message });
   }
 }
-
