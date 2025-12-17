@@ -1,18 +1,17 @@
 // pages/api/delta-sync.js
 import { mapVehicle } from "../libs/map.js";
 import crypto from "crypto";
+import { kv } from "@vercel/kv";
 
 const WEBFLOW_BASE = "https://api.webflow.com/v2";
+const COLD_OFFSET_KEY = "delta-sync-cold-offset";
 let featureMapCache = null;
 
 /* ----------------------------------------------------
    HASH
 ---------------------------------------------------- */
 function createHash(obj) {
-  return crypto
-    .createHash("sha1")
-    .update(JSON.stringify(obj))
-    .digest("hex");
+  return crypto.createHash("sha1").update(JSON.stringify(obj)).digest("hex");
 }
 
 /* ----------------------------------------------------
@@ -46,15 +45,6 @@ async function unpublishLiveItem(collectionId, itemId, token) {
 }
 
 /* ----------------------------------------------------
-   ORIGIN
----------------------------------------------------- */
-function getOrigin(req) {
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  return `${proto}://${host}`;
-}
-
-/* ----------------------------------------------------
    FEATURE MAP
 ---------------------------------------------------- */
 async function getFeatureMap(token, collectionId) {
@@ -62,11 +52,10 @@ async function getFeatureMap(token, collectionId) {
 
   const map = {};
   let offset = 0;
-  const limit = 100;
 
   while (true) {
     const res = await wf(
-      `${WEBFLOW_BASE}/collections/${collectionId}/items?limit=${limit}&offset=${offset}`,
+      `${WEBFLOW_BASE}/collections/${collectionId}/items?limit=100&offset=${offset}`,
       "GET",
       token
     );
@@ -76,8 +65,8 @@ async function getFeatureMap(token, collectionId) {
       if (slug) map[slug] = item.id;
     }
 
-    if (!res.items || res.items.length < limit) break;
-    offset += limit;
+    if (!res.items || res.items.length < 100) break;
+    offset += 100;
   }
 
   featureMapCache = map;
@@ -85,7 +74,7 @@ async function getFeatureMap(token, collectionId) {
 }
 
 /* ----------------------------------------------------
-   PUBLISH
+   PUBLISH ITEM
 ---------------------------------------------------- */
 async function publishItem(collectionId, token, itemId) {
   return wf(
@@ -94,6 +83,89 @@ async function publishItem(collectionId, token, itemId) {
     token,
     { itemIds: [itemId] }
   );
+}
+
+/* ----------------------------------------------------
+   PROCESS BATCH
+---------------------------------------------------- */
+async function processBatch({
+  ads,
+  wfMap,
+  featureMap,
+  token,
+  collectionId,
+  dryRun,
+  stats,
+}) {
+  for (const ad of ads) {
+    try {
+      const mapped = mapVehicle(ad);
+
+      /* ------------------------------------------
+         🚗 NEUWAGEN-KILOMETER-FIX
+      ------------------------------------------ */
+      const hasErstzulassung =
+        mapped.erstzulassung &&
+        String(mapped.erstzulassung).trim() !== "";
+
+      const kmParsed =
+        typeof mapped.kilometer === "number"
+          ? mapped.kilometer
+          : parseInt(mapped.kilometer, 10);
+
+      const hasValidKm =
+        Number.isFinite(kmParsed) && kmParsed > 0;
+
+      if (!hasErstzulassung && !hasValidKm) {
+        mapped.kilometer = "0"; // STRING für Webflow
+      }
+      /* ------------------------------------------ */
+
+      const featureIds = (mapped.featureSlugs || [])
+        .map((s) => featureMap[s])
+        .filter(Boolean);
+
+      delete mapped.featureSlugs;
+      mapped.features = featureIds;
+
+      const hash = createHash(mapped);
+      mapped["sync-hash"] = hash;
+
+      const existing = wfMap.get(mapped["fahrzeug-id"]);
+
+      if (existing) {
+        if (existing.fieldData?.["sync-hash"] === hash) {
+          stats.skipped++;
+          continue;
+        }
+
+        if (!dryRun) {
+          await wf(
+            `${WEBFLOW_BASE}/collections/${collectionId}/items/${existing.id}`,
+            "PATCH",
+            token,
+            { isDraft: false, isArchived: false, fieldData: mapped }
+          );
+          await publishItem(collectionId, token, existing.id);
+        }
+
+        stats.updated++;
+      } else {
+        if (!dryRun) {
+          const created = await wf(
+            `${WEBFLOW_BASE}/collections/${collectionId}/items`,
+            "POST",
+            token,
+            { isDraft: false, isArchived: false, fieldData: mapped }
+          );
+          await publishItem(collectionId, token, created.id);
+        }
+        stats.created++;
+      }
+    } catch (e) {
+      stats.errors.push({ syscaraId: ad?.id, error: e });
+    }
+  }
 }
 
 /* ----------------------------------------------------
@@ -109,6 +181,12 @@ export default async function handler(req, res) {
       SYS_API_PASS,
     } = process.env;
 
+    // ✅ limit jetzt steuerbar, max 25
+    const limit = Math.min(
+      parseInt(req.query.limit || "25", 10),
+      25
+    );
+
     const dryRun = req.query.dry === "1";
 
     /* ----------------------------------------------
@@ -121,15 +199,10 @@ export default async function handler(req, res) {
     const sysRes = await fetch("https://api.syscara.com/sale/ads/", {
       headers: { Authorization: auth },
     });
-
     if (!sysRes.ok) throw await sysRes.text();
 
     const sysAds = Object.values(await sysRes.json());
-
-    const sysMap = new Map();
-    for (const ad of sysAds) {
-      if (ad?.id) sysMap.set(String(ad.id), ad);
-    }
+    const sysMap = new Map(sysAds.map((a) => [String(a.id), a]));
 
     /* ----------------------------------------------
        WEBFLOW ITEMS
@@ -138,18 +211,16 @@ export default async function handler(req, res) {
     let wfOffset = 0;
 
     while (true) {
-      const wfRes = await wf(
+      const res = await wf(
         `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items?limit=100&offset=${wfOffset}`,
         "GET",
         WEBFLOW_TOKEN
       );
-
-      for (const item of wfRes.items || []) {
+      for (const item of res.items || []) {
         const fid = item.fieldData?.["fahrzeug-id"];
         if (fid) wfMap.set(String(fid), item);
       }
-
-      if (!wfRes.items || wfRes.items.length < 100) break;
+      if (!res.items || res.items.length < 100) break;
       wfOffset += 100;
     }
 
@@ -158,151 +229,83 @@ export default async function handler(req, res) {
       WEBFLOW_FEATURES_COLLECTION
     );
 
-    const origin = getOrigin(req);
-
-    let created = 0;
-    let updated = 0;
-    let skipped = 0;
-    let deleted = 0;
-    const errors = [];
+    const stats = {
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      deleted: 0,
+      errors: [],
+    };
 
     /* ----------------------------------------------
-       CREATE / UPDATE
+       HOT PATH
     ---------------------------------------------- */
-    for (const ad of sysAds) {
-      try {
-        const mapped = mapVehicle(ad);
+    await processBatch({
+      ads: sysAds.slice(0, limit),
+      wfMap,
+      featureMap,
+      token: WEBFLOW_TOKEN,
+      collectionId: WEBFLOW_COLLECTION,
+      dryRun,
+      stats,
+    });
 
-        /* 🚗 NEUWAGEN-FIX (STRING!) */
-        const hasErstzulassung =
-          mapped.erstzulassung &&
-          String(mapped.erstzulassung).trim() !== "";
+    /* ----------------------------------------------
+       COLD CRAWL
+    ---------------------------------------------- */
+    const coldOffset = (await kv.get(COLD_OFFSET_KEY)) || 0;
+    const coldBatch = sysAds.slice(coldOffset, coldOffset + limit);
 
-        const kmParsed =
-          typeof mapped.kilometer === "number"
-            ? mapped.kilometer
-            : parseInt(mapped.kilometer, 10);
+    await processBatch({
+      ads: coldBatch,
+      wfMap,
+      featureMap,
+      token: WEBFLOW_TOKEN,
+      collectionId: WEBFLOW_COLLECTION,
+      dryRun,
+      stats,
+    });
 
-        const hasValidKm =
-          Number.isFinite(kmParsed) && kmParsed > 0;
+    const nextOffset =
+      coldOffset + limit >= sysAds.length ? 0 : coldOffset + limit;
 
-        if (!hasErstzulassung && !hasValidKm) {
-          mapped.kilometer = "0"; // ← DAS ist der Fix
-        }
-
-        if (mapped["media-cache"]) {
-          const cache = JSON.parse(mapped["media-cache"]);
-
-          if (cache.hauptbild)
-            mapped.hauptbild = `${origin}/api/media?id=${cache.hauptbild}`;
-
-          if (Array.isArray(cache.galerie))
-            mapped.galerie = cache.galerie
-              .slice(0, 25)
-              .map((id) => `${origin}/api/media?id=${id}`);
-
-          if (cache.grundriss)
-            mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
-        }
-
-        const featureIds = (mapped.featureSlugs || [])
-          .map((slug) => featureMap[slug])
-          .filter(Boolean);
-
-        delete mapped.featureSlugs;
-        mapped.features = featureIds;
-
-        const hash = createHash(mapped);
-        mapped["sync-hash"] = hash;
-
-        const existing = wfMap.get(mapped["fahrzeug-id"]);
-
-        if (existing) {
-          if (existing.fieldData?.["sync-hash"] === hash) {
-            skipped++;
-            continue;
-          }
-
-          if (!dryRun) {
-            await wf(
-              `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}`,
-              "PATCH",
-              WEBFLOW_TOKEN,
-              { isDraft: false, isArchived: false, fieldData: mapped }
-            );
-
-            await publishItem(
-              WEBFLOW_COLLECTION,
-              WEBFLOW_TOKEN,
-              existing.id
-            );
-          }
-
-          updated++;
-        } else {
-          if (!dryRun) {
-            const createdItem = await wf(
-              `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items`,
-              "POST",
-              WEBFLOW_TOKEN,
-              { isDraft: false, isArchived: false, fieldData: mapped }
-            );
-
-            await publishItem(
-              WEBFLOW_COLLECTION,
-              WEBFLOW_TOKEN,
-              createdItem.id
-            );
-          }
-
-          created++;
-        }
-      } catch (e) {
-        errors.push({ syscaraId: ad?.id || null, error: e });
-      }
+    if (!dryRun) {
+      await kv.set(COLD_OFFSET_KEY, nextOffset);
     }
 
     /* ----------------------------------------------
-       DELETE
+       DELETES
     ---------------------------------------------- */
     for (const [fid, item] of wfMap.entries()) {
       if (!sysMap.has(fid)) {
-        try {
-          if (!dryRun) {
-            await unpublishLiveItem(
-              WEBFLOW_COLLECTION,
-              item.id,
-              WEBFLOW_TOKEN
-            );
-
-            await wf(
-              `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${item.id}`,
-              "DELETE",
-              WEBFLOW_TOKEN
-            );
-          }
-          deleted++;
-        } catch (e) {
-          errors.push({ syscaraId: fid, error: e });
+        if (!dryRun) {
+          await unpublishLiveItem(
+            WEBFLOW_COLLECTION,
+            item.id,
+            WEBFLOW_TOKEN
+          );
+          await wf(
+            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${item.id}`,
+            "DELETE",
+            WEBFLOW_TOKEN
+          );
         }
+        stats.deleted++;
       }
     }
 
     return res.status(200).json({
       ok: true,
-      dryRun,
-      syscaraTotal: sysAds.length,
-      webflowTotal: wfMap.size,
-      created,
-      updated,
-      skipped,
-      deleted,
-      errors,
+      totals: {
+        syscara: sysAds.length,
+        webflow: wfMap.size,
+      },
+      hotBatch: limit,
+      coldOffset,
+      nextColdOffset: nextOffset,
+      ...stats,
     });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({
-      error: err?.message || err,
-    });
+    return res.status(500).json({ error: err });
   }
 }
