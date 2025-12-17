@@ -187,7 +187,7 @@ export default async function handler(req, res) {
           Number.isFinite(kmParsed) && kmParsed > 0;
 
         if (!hasErstzulassung && !hasValidKm) {
-          mapped.kilometer = "0"; // ✅ STRING, nicht number
+          mapped.kilometer = "0"; // ← DAS ist der Fix
         }
 
         if (mapped["media-cache"]) {
