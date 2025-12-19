@@ -43,6 +43,15 @@ async function unpublishLiveItem(collectionId, itemId, token) {
 }
 
 /* ----------------------------------------------------
+   ORIGIN (für Media Proxy)
+---------------------------------------------------- */
+function getOrigin(req) {
+  const proto = req.headers["x-forwarded-proto"] || "https";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
+/* ----------------------------------------------------
    FEATURE MAP
 ---------------------------------------------------- */
 async function getFeatureMap(token, collectionId) {
@@ -100,6 +109,8 @@ export default async function handler(req, res) {
     const offset = parseInt(req.query.offset || "0", 10);
     const dryRun = req.query.dry === "1";
 
+    const origin = getOrigin(req);
+
     /* ----------------------------------------------
        SYSCARA
     ---------------------------------------------- */
@@ -154,7 +165,7 @@ export default async function handler(req, res) {
       try {
         const mapped = mapVehicle(ad);
 
-        // 🚗 Neuwagen: km = "0"
+        /* 🚗 Neuwagen: km = "0" */
         const hasErstzulassung =
           mapped.erstzulassung &&
           String(mapped.erstzulassung).trim() !== "";
@@ -168,6 +179,23 @@ export default async function handler(req, res) {
           mapped.kilometer = "0";
         }
 
+        /* 🖼️ MEDIA MAPPING (WICHTIG!) */
+        if (mapped["media-cache"]) {
+          const cache = JSON.parse(mapped["media-cache"]);
+
+          if (cache.hauptbild)
+            mapped.hauptbild = `${origin}/api/media?id=${cache.hauptbild}`;
+
+          if (Array.isArray(cache.galerie))
+            mapped.galerie = cache.galerie
+              .slice(0, 25)
+              .map((id) => `${origin}/api/media?id=${id}`);
+
+          if (cache.grundriss)
+            mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
+        }
+
+        /* FEATURES */
         const featureIds = (mapped.featureSlugs || [])
           .map((s) => featureMap[s])
           .filter(Boolean);
@@ -252,4 +280,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err });
   }
 }
-
