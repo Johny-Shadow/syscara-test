@@ -7,7 +7,7 @@ const OFFSET_KEY = "delta-sync-offset";
 let featureMapCache = null;
 
 /* ----------------------------------------------------
-   REDIS (Upstash REST – KEIN SDK!)
+   REDIS (Upstash REST – OHNE SDK)
 ---------------------------------------------------- */
 async function redisGet(key) {
   const res = await fetch(
@@ -20,7 +20,7 @@ async function redisGet(key) {
     }
   );
   const json = await res.json();
-  return json.result;
+  return json.result === null ? null : Number(json.result);
 }
 
 async function redisSet(key, value) {
@@ -30,9 +30,9 @@ async function redisSet(key, value) {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
-        "Content-Type": "application/json",
+        "Content-Type": "text/plain",
       },
-      body: JSON.stringify(value),
+      body: String(value),
     }
   );
 }
@@ -84,7 +84,7 @@ function getOrigin(req) {
 }
 
 /* ----------------------------------------------------
-   FEATURE MAP (slug → id)
+   FEATURE MAP
 ---------------------------------------------------- */
 async function getFeatureMap(token, collectionId) {
   if (featureMapCache) return featureMapCache;
@@ -142,7 +142,7 @@ export default async function handler(req, res) {
     const origin = getOrigin(req);
 
     /* ----------------------------------------------
-       OFFSET AUS REDIS
+       OFFSET
     ---------------------------------------------- */
     let offset = (await redisGet(OFFSET_KEY)) || 0;
 
@@ -174,10 +174,12 @@ export default async function handler(req, res) {
         "GET",
         WEBFLOW_TOKEN
       );
+
       for (const item of res.items || []) {
         const fid = item.fieldData?.["fahrzeug-id"];
         if (fid) wfMap.set(String(fid), item);
       }
+
       if (!res.items || res.items.length < 100) break;
       wfOffset += 100;
     }
@@ -200,7 +202,7 @@ export default async function handler(req, res) {
       try {
         const mapped = mapVehicle(ad);
 
-        // 🚗 Neuwagen → Kilometer = "0" (STRING!)
+        // 🚗 Kilometer-Fix (Webflow erwartet STRING)
         const hasErstzulassung =
           mapped.erstzulassung &&
           String(mapped.erstzulassung).trim() !== "";
@@ -280,7 +282,7 @@ export default async function handler(req, res) {
     }
 
     /* ----------------------------------------------
-       DELETE (Live → Delete)
+       DELETE
     ---------------------------------------------- */
     for (const [fid, item] of wfMap.entries()) {
       if (!sysMap.has(fid)) {
@@ -330,4 +332,5 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err });
   }
 }
+
 
