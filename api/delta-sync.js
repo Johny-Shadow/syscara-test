@@ -1,9 +1,14 @@
 // pages/api/delta-sync.js
 import { mapVehicle } from "../libs/map.js";
 import crypto from "crypto";
+import { Redis } from "@upstash/redis";
 
 const WEBFLOW_BASE = "https://api.webflow.com/v2";
+const OFFSET_KEY = "delta-sync-offset";
 let featureMapCache = null;
+
+// Redis (Upstash)
+const redis = Redis.fromEnv();
 
 /* ----------------------------------------------------
    HASH
@@ -106,10 +111,13 @@ export default async function handler(req, res) {
     } = process.env;
 
     const limit = Math.min(parseInt(req.query.limit || "25", 10), 25);
-    const offset = parseInt(req.query.offset || "0", 10);
     const dryRun = req.query.dry === "1";
-
     const origin = getOrigin(req);
+
+    /* ----------------------------------------------
+       OFFSET AUS REDIS
+    ---------------------------------------------- */
+    let offset = (await redis.get(OFFSET_KEY)) || 0;
 
     /* ----------------------------------------------
        SYSCARA
@@ -165,7 +173,7 @@ export default async function handler(req, res) {
       try {
         const mapped = mapVehicle(ad);
 
-        /* 🚗 Neuwagen: km = "0" */
+        // 🚗 Neuwagen: km = "0"
         const hasErstzulassung =
           mapped.erstzulassung &&
           String(mapped.erstzulassung).trim() !== "";
@@ -179,7 +187,7 @@ export default async function handler(req, res) {
           mapped.kilometer = "0";
         }
 
-        /* 🖼️ MEDIA MAPPING (WICHTIG!) */
+        // 🖼️ MEDIA
         if (mapped["media-cache"]) {
           const cache = JSON.parse(mapped["media-cache"]);
 
@@ -195,7 +203,7 @@ export default async function handler(req, res) {
             mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
         }
 
-        /* FEATURES */
+        // FEATURES
         const featureIds = (mapped.featureSlugs || [])
           .map((s) => featureMap[s])
           .filter(Boolean);
@@ -267,9 +275,25 @@ export default async function handler(req, res) {
       }
     }
 
+    /* ----------------------------------------------
+       OFFSET AKTUALISIEREN
+    ---------------------------------------------- */
+    const nextOffset =
+      offset + limit >= sysAds.length ? 0 : offset + limit;
+
+    if (!dryRun) {
+      await redis.set(OFFSET_KEY, nextOffset);
+    }
+
     return res.status(200).json({
       ok: true,
-      batch: { limit, offset },
+      limit,
+      offset,
+      nextOffset,
+      totals: {
+        syscara: sysAds.length,
+        webflow: wfMap.size,
+      },
       created,
       updated,
       skipped,
@@ -277,6 +301,7 @@ export default async function handler(req, res) {
       errors,
     });
   } catch (err) {
+    console.error(err);
     return res.status(500).json({ error: err });
   }
 }
