@@ -7,7 +7,7 @@ const OFFSET_KEY = "delta-sync-offset";
 let featureMapCache = null;
 
 /* ----------------------------------------------------
-   REDIS (Upstash REST – OHNE SDK)
+   REDIS (Upstash REST – ohne SDK)
 ---------------------------------------------------- */
 async function redisGet(key) {
   const res = await fetch(
@@ -41,7 +41,10 @@ async function redisSet(key, value) {
    HASH
 ---------------------------------------------------- */
 function createHash(obj) {
-  return crypto.createHash("sha1").update(JSON.stringify(obj)).digest("hex");
+  return crypto
+    .createHash("sha1")
+    .update(JSON.stringify(obj))
+    .digest("hex");
 }
 
 /* ----------------------------------------------------
@@ -59,12 +62,12 @@ async function wf(url, method, token, body) {
   });
 
   const json = res.status !== 204 ? await res.json() : null;
-  if (!res.ok) throw json || await res.text();
+  if (!res.ok) throw json || (await res.text());
   return json;
 }
 
 /* ----------------------------------------------------
-   LIVE UNPUBLISH
+   UNPUBLISH LIVE ITEM
 ---------------------------------------------------- */
 async function unpublishLiveItem(collectionId, itemId, token) {
   return wf(
@@ -75,7 +78,19 @@ async function unpublishLiveItem(collectionId, itemId, token) {
 }
 
 /* ----------------------------------------------------
-   ORIGIN (für Media Proxy)
+   PUBLISH (STAGING)
+---------------------------------------------------- */
+async function publishItem(collectionId, token, itemId) {
+  return wf(
+    `${WEBFLOW_BASE}/collections/${collectionId}/items/publish`,
+    "POST",
+    token,
+    { itemIds: [itemId] }
+  );
+}
+
+/* ----------------------------------------------------
+   ORIGIN (Media Proxy)
 ---------------------------------------------------- */
 function getOrigin(req) {
   const proto = req.headers["x-forwarded-proto"] || "https";
@@ -84,7 +99,7 @@ function getOrigin(req) {
 }
 
 /* ----------------------------------------------------
-   FEATURE MAP
+   FEATURE MAP (slug → ID)
 ---------------------------------------------------- */
 async function getFeatureMap(token, collectionId) {
   if (featureMapCache) return featureMapCache;
@@ -113,18 +128,6 @@ async function getFeatureMap(token, collectionId) {
 }
 
 /* ----------------------------------------------------
-   PUBLISH (STAGING)
----------------------------------------------------- */
-async function publishItem(collectionId, token, itemId) {
-  return wf(
-    `${WEBFLOW_BASE}/collections/${collectionId}/items/publish`,
-    "POST",
-    token,
-    { itemIds: [itemId] }
-  );
-}
-
-/* ----------------------------------------------------
    API HANDLER
 ---------------------------------------------------- */
 export default async function handler(req, res) {
@@ -147,7 +150,7 @@ export default async function handler(req, res) {
     let offset = (await redisGet(OFFSET_KEY)) || 0;
 
     /* ----------------------------------------------
-       SYSCARA
+       SYSCARA – LOAD + FILTER (PLZ 24783)
     ---------------------------------------------- */
     const auth =
       "Basic " +
@@ -158,7 +161,13 @@ export default async function handler(req, res) {
     });
     if (!sysRes.ok) throw await sysRes.text();
 
-    const sysAds = Object.values(await sysRes.json());
+    const sysAdsAll = Object.values(await sysRes.json());
+
+    // ✅ NUR OSTERRÖNFELD
+    const sysAds = sysAdsAll.filter(
+      (ad) => ad?.store?.zipcode === "24783"
+    );
+
     const batch = sysAds.slice(offset, offset + limit);
     const sysMap = new Map(sysAds.map((a) => [String(a.id), a]));
 
@@ -169,18 +178,18 @@ export default async function handler(req, res) {
     let wfOffset = 0;
 
     while (true) {
-      const res = await wf(
+      const r = await wf(
         `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items?limit=100&offset=${wfOffset}`,
         "GET",
         WEBFLOW_TOKEN
       );
 
-      for (const item of res.items || []) {
+      for (const item of r.items || []) {
         const fid = item.fieldData?.["fahrzeug-id"];
         if (fid) wfMap.set(String(fid), item);
       }
 
-      if (!res.items || res.items.length < 100) break;
+      if (!r.items || r.items.length < 100) break;
       wfOffset += 100;
     }
 
@@ -202,19 +211,11 @@ export default async function handler(req, res) {
       try {
         const mapped = mapVehicle(ad);
 
-        // 🚗 Kilometer-Fix (Webflow erwartet STRING)
-        const hasErstzulassung =
-          mapped.erstzulassung &&
-          String(mapped.erstzulassung).trim() !== "";
+        // Kilometer Fix
+        const km = parseInt(mapped.kilometer, 10);
+        mapped.kilometer = Number.isFinite(km) ? String(km) : "0";
 
-        const kmParsed = parseInt(mapped.kilometer, 10);
-        if (!hasErstzulassung && !Number.isFinite(kmParsed)) {
-          mapped.kilometer = "0";
-        } else if (Number.isFinite(kmParsed)) {
-          mapped.kilometer = String(kmParsed);
-        }
-
-        // 🖼️ MEDIA
+        // MEDIA
         if (mapped["media-cache"]) {
           const cache = JSON.parse(mapped["media-cache"]);
 
@@ -256,7 +257,11 @@ export default async function handler(req, res) {
               WEBFLOW_TOKEN,
               { isDraft: false, isArchived: false, fieldData: mapped }
             );
-            await publishItem(WEBFLOW_COLLECTION, WEBFLOW_TOKEN, existing.id);
+            await publishItem(
+              WEBFLOW_COLLECTION,
+              WEBFLOW_TOKEN,
+              existing.id
+            );
           }
 
           updated++;
@@ -277,12 +282,12 @@ export default async function handler(req, res) {
           created++;
         }
       } catch (e) {
-        errors.push({ syscaraId: ad?.id || null, error: e });
+        errors.push({ syscaraId: ad?.id || null, error: String(e) });
       }
     }
 
     /* ----------------------------------------------
-       DELETE
+       DELETE (nicht mehr PLZ 24783 oder entfernt)
     ---------------------------------------------- */
     for (const [fid, item] of wfMap.entries()) {
       if (!sysMap.has(fid)) {
@@ -303,7 +308,7 @@ export default async function handler(req, res) {
     }
 
     /* ----------------------------------------------
-       OFFSET SPEICHERN
+       OFFSET UPDATE
     ---------------------------------------------- */
     const nextOffset =
       offset + limit >= sysAds.length ? 0 : offset + limit;
@@ -318,7 +323,7 @@ export default async function handler(req, res) {
       offset,
       nextOffset,
       totals: {
-        syscara: sysAds.length,
+        syscaraFiltered: sysAds.length,
         webflow: wfMap.size,
       },
       created,
@@ -329,8 +334,7 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: err });
+    return res.status(500).json({ error: String(err) });
   }
 }
-
 
