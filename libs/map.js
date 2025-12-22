@@ -1,175 +1,240 @@
-// libs/map.js
-function slugify(str) {
-  return String(str)
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)+/g, "");
+// pages/api/delta-sync.js
+import { mapVehicle } from "../libs/map.js";
+import crypto from "crypto";
+
+const WEBFLOW_BASE = "https://api.webflow.com/v2";
+const OFFSET_KEY = "delta-sync-offset";
+
+let featureMapCache = null;
+let bettartenMapCache = null;
+
+/* ---------------- REDIS ---------------- */
+async function redisGet(key) {
+  const res = await fetch(
+    `${process.env.KV_REST_API_URL}/get/${key}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
+      },
+    }
+  );
+  const json = await res.json();
+  return json.result === null ? null : Number(json.result);
 }
 
-export function mapVehicle(ad) {
-  // ------------------------------------------------
-  // 1) ID
-  // ------------------------------------------------
-  const vehicleId = ad?.id ? String(ad.id) : "";
-
-  // ------------------------------------------------
-  // 2) Name & Slug
-  // ------------------------------------------------
-  const producer = ad.model?.producer || "";
-  const series = ad.model?.series || "";
-  const model = ad.model?.model || "";
-  const modelAdd = ad.model?.model_add || ""; // ✅ NEU
-
-  const name =
-    [producer, series, model].filter(Boolean).join(" ") ||
-    `Fahrzeug ${vehicleId || "unbekannt"}`;
-
-  const slug = vehicleId
-    ? `${vehicleId}-${slugify(name)}`
-    : slugify(name);
-
-  // ------------------------------------------------
-  // 3) Basisdaten
-  // ------------------------------------------------
-  const zustand = ad.condition || "";
-  const fahrzeugart = ad.type || "";
-  const fahrzeugtyp = ad.typeof || "";
-  const baujahr = ad.model?.modelyear
-    ? String(ad.model.modelyear)
-    : "";
-  const kilometer =
-    ad.mileage != null && ad.mileage !== 0
-      ? String(ad.mileage)
-      : "";
-  const preis =
-    ad.prices?.offer != null ? String(ad.prices.offer) : "";
-
-  // ------------------------------------------------
-  // 4) Maße & Gewichte
-  // ------------------------------------------------
-  const breite = ad.dimensions?.width
-    ? String(ad.dimensions.width)
-    : "";
-  const hoehe = ad.dimensions?.height
-    ? String(ad.dimensions.height)
-    : "";
-  const laenge = ad.dimensions?.length
-    ? String(ad.dimensions.length)
-    : "";
-  const gesamtmasse = ad.weights?.total
-    ? String(ad.weights.total)
-    : "";
-
-  // ------------------------------------------------
-  // 5) Zulassung / Innenraum
-  // ------------------------------------------------
-  const erstzulassung = ad.date?.registration || "";
-  const schlafplatz = ad.beds?.num
-    ? String(ad.beds.num)
-    : "";
-
-  const bett = Array.isArray(ad.beds?.beds)
-    ? ad.beds.beds.map((b) => b.type).join(", ")
-    : "";
-
-  const sitzgruppe = Array.isArray(ad.seating?.seatings)
-    ? ad.seating.seatings.map((s) => s.type).join(", ")
-    : "";
-
-  // ------------------------------------------------
-  // 6) Technik
-  // ------------------------------------------------
-  const ps = ad.engine?.ps != null ? String(ad.engine.ps) : "";
-  const kw = ad.engine?.kw != null ? String(ad.engine.kw) : "";
-  const kraftstoff = ad.engine?.fuel || "";
-  const getriebe = ad.engine?.gear || "";
-
-  // ------------------------------------------------
-  // 7) Texte
-  // ------------------------------------------------
-  const beschreibung =
-    ad.texts?.description || ad.description || "";
-
-  // ------------------------------------------------
-  // 8) Verkauf / Miete
-  // ------------------------------------------------
-  const verkaufMiete =
-    ad.category === "Rent" ? "miete" : "verkauf";
-
-  // ------------------------------------------------
-  // 9) Geräte-ID
-  // ------------------------------------------------
-  const geraetId = ad.identifier?.internal
-    ? String(ad.identifier.internal)
-    : "";
-
-  // ------------------------------------------------
-  // 10) Features → SLUGS
-  // ------------------------------------------------
-  const features = Array.isArray(ad.features) ? ad.features : [];
-  const featureSlugs = features.map((f) =>
-    String(f).toLowerCase().replace(/_/g, "-")
+async function redisSet(key, value) {
+  await fetch(
+    `${process.env.KV_REST_API_URL}/set/${key}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
+        "Content-Type": "text/plain",
+      },
+      body: String(value),
+    }
   );
+}
 
-  // ------------------------------------------------
-  // 11) Media-Cache
-  // ------------------------------------------------
-  const media = Array.isArray(ad.media) ? ad.media : [];
-  const images = media.filter(
-    (m) => m && m.group === "image" && m.id
-  );
-  const grundriss =
-    media.find((m) => m && m.group === "layout")?.id || null;
+/* ---------------- HASH ---------------- */
+function createHash(obj) {
+  return crypto
+    .createHash("sha1")
+    .update(JSON.stringify(obj))
+    .digest("hex");
+}
 
-  const mediaCache = JSON.stringify({
-    hauptbild: images[0]?.id || null,
-    galerie: images.map((m) => m.id),
-    grundriss,
+/* ---------------- WEBFLOW ---------------- */
+async function wf(url, method, token, body) {
+  const res = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
   });
 
-  // ------------------------------------------------
-  // 12) RÜCKGABE
-  // ------------------------------------------------
-  return {
-    name,
-    slug,
-
-    "fahrzeug-id": vehicleId,
-
-    hersteller: producer,
-    serie: series,
-    modell: model,
-    "modell-zusatz": modelAdd, // ✅ NEU
-
-    fahrzeugart,
-    fahrzeugtyp,
-    zustand,
-    baujahr,
-    kilometer,
-    preis,
-
-    breite,
-    hoehe,
-    laenge,
-    gesamtmasse,
-
-    erstzulassung,
-    schlafplatz,
-    bett,
-    sitzgruppe,
-
-    ps,
-    kw,
-    kraftstoff,
-    getriebe,
-
-    beschreibung,
-    "geraet-id": geraetId,
-    "verkauf-miete": verkaufMiete,
-
-    featureSlugs,
-    "media-cache": mediaCache,
-  };
+  const json = res.status !== 204 ? await res.json() : null;
+  if (!res.ok) throw json || (await res.text());
+  return json;
 }
+
+/* ---------------- MAP LOADER ---------------- */
+async function loadSlugMap(token, collectionId) {
+  const map = {};
+  let offset = 0;
+
+  while (true) {
+    const r = await wf(
+      `${WEBFLOW_BASE}/collections/${collectionId}/items?limit=100&offset=${offset}`,
+      "GET",
+      token
+    );
+
+    for (const item of r.items || []) {
+      const slug = item.fieldData?.slug;
+      if (slug) map[slug] = item.id;
+    }
+
+    if (!r.items || r.items.length < 100) break;
+    offset += 100;
+  }
+
+  return map;
+}
+
+async function getFeatureMap(token, cid) {
+  if (!featureMapCache)
+    featureMapCache = await loadSlugMap(token, cid);
+  return featureMapCache;
+}
+
+async function getBettartenMap(token, cid) {
+  if (!bettartenMapCache)
+    bettartenMapCache = await loadSlugMap(token, cid);
+  return bettartenMapCache;
+}
+
+/* ---------------- HANDLER ---------------- */
+export default async function handler(req, res) {
+  try {
+    const {
+      WEBFLOW_TOKEN,
+      WEBFLOW_COLLECTION,
+      WEBFLOW_FEATURES_COLLECTION,
+      WEBFLOW_BETTARTEN_COLLECTION,
+      SYS_API_USER,
+      SYS_API_PASS,
+    } = process.env;
+
+    const limit = Math.min(Number(req.query.limit || 25), 25);
+    const dryRun = req.query.dry === "1";
+
+    let offset = (await redisGet(OFFSET_KEY)) || 0;
+
+    const auth =
+      "Basic " +
+      Buffer.from(`${SYS_API_USER}:${SYS_API_PASS}`).toString("base64");
+
+    const sysRes = await fetch(
+      "https://api.syscara.com/sale/ads/",
+      { headers: { Authorization: auth } }
+    );
+    if (!sysRes.ok) throw await sysRes.text();
+
+    const sysAdsAll = Object.values(await sysRes.json());
+    const sysAds = sysAdsAll.filter(
+      (a) => a?.store?.zipcode === "24783"
+    );
+
+    const batch = sysAds.slice(offset, offset + limit);
+    const sysMap = new Map(sysAds.map((a) => [String(a.id), a]));
+
+    const wfMap = new Map();
+    let wfOffset = 0;
+
+    while (true) {
+      const r = await wf(
+        `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items?limit=100&offset=${wfOffset}`,
+        "GET",
+        WEBFLOW_TOKEN
+      );
+      for (const item of r.items || []) {
+        const fid = item.fieldData?.["fahrzeug-id"];
+        if (fid) wfMap.set(String(fid), item);
+      }
+      if (!r.items || r.items.length < 100) break;
+      wfOffset += 100;
+    }
+
+    const featureMap = await getFeatureMap(
+      WEBFLOW_TOKEN,
+      WEBFLOW_FEATURES_COLLECTION
+    );
+    const bettartenMap = await getBettartenMap(
+      WEBFLOW_TOKEN,
+      WEBFLOW_BETTARTEN_COLLECTION
+    );
+
+    let created = 0,
+      updated = 0,
+      skipped = 0,
+      deleted = 0;
+
+    for (const ad of batch) {
+      const mapped = mapVehicle(ad);
+
+      mapped.features = (mapped.featureSlugs || [])
+        .map((s) => featureMap[s])
+        .filter(Boolean);
+
+      mapped.bettarten = (mapped.bettartenSlugs || [])
+        .map((s) => bettartenMap[s])
+        .filter(Boolean);
+
+      delete mapped.featureSlugs;
+      delete mapped.bettartenSlugs;
+
+      mapped["sync-hash"] = createHash(mapped);
+
+      const existing = wfMap.get(mapped["fahrzeug-id"]);
+
+      if (existing) {
+        if (existing.fieldData?.["sync-hash"] === mapped["sync-hash"]) {
+          skipped++;
+          continue;
+        }
+        if (!dryRun) {
+          await wf(
+            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${existing.id}`,
+            "PATCH",
+            WEBFLOW_TOKEN,
+            { isDraft: false, isArchived: false, fieldData: mapped }
+          );
+        }
+        updated++;
+      } else {
+        if (!dryRun) {
+          await wf(
+            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items`,
+            "POST",
+            WEBFLOW_TOKEN,
+            { isDraft: false, isArchived: false, fieldData: mapped }
+          );
+        }
+        created++;
+      }
+    }
+
+    for (const [fid, item] of wfMap.entries()) {
+      if (!sysMap.has(fid)) {
+        if (!dryRun) {
+          await wf(
+            `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${item.id}`,
+            "DELETE",
+            WEBFLOW_TOKEN
+          );
+        }
+        deleted++;
+      }
+    }
+
+    const nextOffset =
+      offset + limit >= sysAds.length ? 0 : offset + limit;
+    if (!dryRun) await redisSet(OFFSET_KEY, nextOffset);
+
+    res.json({
+      ok: true,
+      created,
+      updated,
+      skipped,
+      deleted,
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+}
+
