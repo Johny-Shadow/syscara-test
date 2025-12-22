@@ -8,7 +8,7 @@ function slugify(str) {
     .replace(/(^-|-$)+/g, "");
 }
 
-export function mapVehicle(ad) {
+export default function mapVehicle(ad) {
   const vehicleId = ad?.id ? String(ad.id) : "";
 
   const producer = ad.model?.producer || "";
@@ -24,10 +24,7 @@ export function mapVehicle(ad) {
     ? `${vehicleId}-${slugify(name)}`
     : slugify(name);
 
-  /* -----------------------------
-     Bettarten → SLUGS
-     (robust: Array ODER String)
-  ----------------------------- */
+  /* ---------------- Bettarten ---------------- */
   let rawBeds = [];
 
   if (Array.isArray(ad.beds?.beds)) {
@@ -41,21 +38,13 @@ export function mapVehicle(ad) {
     .filter(Boolean)
     .map((b) => slugify(b));
 
-  /* -----------------------------
-     Features → SLUGS (unverändert)
-  ----------------------------- */
+  /* ---------------- Features ---------------- */
   const features = Array.isArray(ad.features) ? ad.features : [];
-  const featureSlugs = features.map((f) =>
-    slugify(String(f))
-  );
+  const featureSlugs = features.map((f) => slugify(String(f)));
 
-  /* -----------------------------
-     Media Cache (UNVERÄNDERT)
-  ----------------------------- */
+  /* ---------------- Media Cache ---------------- */
   const media = Array.isArray(ad.media) ? ad.media : [];
-  const images = media.filter(
-    (m) => m && m.group === "image" && m.id
-  );
+  const images = media.filter((m) => m && m.group === "image" && m.id);
   const grundriss =
     media.find((m) => m && m.group === "layout")?.id || null;
 
@@ -108,5 +97,3 @@ export function mapVehicle(ad) {
     "media-cache": mediaCache,
   };
 }
-
-
