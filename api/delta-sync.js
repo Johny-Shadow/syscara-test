@@ -6,38 +6,46 @@ const WEBFLOW_BASE = "https://api.webflow.com/v2";
 const OFFSET_KEY = "delta-sync-offset";
 
 let featureMapCache = null;
-let bettartenMapCache = null;
 
 /* ----------------------------------------------------
    REDIS (Upstash REST – ohne SDK)
 ---------------------------------------------------- */
 async function redisGet(key) {
-  const res = await fetch(`${process.env.KV_REST_API_URL}/get/${key}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
-    },
-  });
+  const res = await fetch(
+    `${process.env.KV_REST_API_URL}/get/${key}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
+      },
+    }
+  );
   const json = await res.json();
   return json.result === null ? null : Number(json.result);
 }
 
 async function redisSet(key, value) {
-  await fetch(`${process.env.KV_REST_API_URL}/set/${key}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
-      "Content-Type": "text/plain",
-    },
-    body: String(value),
-  });
+  await fetch(
+    `${process.env.KV_REST_API_URL}/set/${key}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
+        "Content-Type": "text/plain",
+      },
+      body: String(value),
+    }
+  );
 }
 
 /* ----------------------------------------------------
    HASH
 ---------------------------------------------------- */
 function createHash(obj) {
-  return crypto.createHash("sha1").update(JSON.stringify(obj)).digest("hex");
+  return crypto
+    .createHash("sha1")
+    .update(JSON.stringify(obj))
+    .digest("hex");
 }
 
 /* ----------------------------------------------------
@@ -74,9 +82,12 @@ async function unpublishLiveItem(collectionId, itemId, token) {
    PUBLISH (STAGING)
 ---------------------------------------------------- */
 async function publishItem(collectionId, token, itemId) {
-  return wf(`${WEBFLOW_BASE}/collections/${collectionId}/items/publish`, "POST", token, {
-    itemIds: [itemId],
-  });
+  return wf(
+    `${WEBFLOW_BASE}/collections/${collectionId}/items/publish`,
+    "POST",
+    token,
+    { itemIds: [itemId] }
+  );
 }
 
 /* ----------------------------------------------------
@@ -89,9 +100,11 @@ function getOrigin(req) {
 }
 
 /* ----------------------------------------------------
-   GENERIC MAP LOADER (slug → ID)
+   FEATURE MAP (slug → ID)
 ---------------------------------------------------- */
-async function loadSlugToIdMap(token, collectionId) {
+async function getFeatureMap(token, collectionId) {
+  if (featureMapCache) return featureMapCache;
+
   const map = {};
   let offset = 0;
 
@@ -111,25 +124,8 @@ async function loadSlugToIdMap(token, collectionId) {
     offset += 100;
   }
 
+  featureMapCache = map;
   return map;
-}
-
-/* ----------------------------------------------------
-   FEATURE MAP (slug → ID)
----------------------------------------------------- */
-async function getFeatureMap(token, collectionId) {
-  if (featureMapCache) return featureMapCache;
-  featureMapCache = await loadSlugToIdMap(token, collectionId);
-  return featureMapCache;
-}
-
-/* ----------------------------------------------------
-   BETTARTEN MAP (slug → ID)
----------------------------------------------------- */
-async function getBettartenMap(token, collectionId) {
-  if (bettartenMapCache) return bettartenMapCache;
-  bettartenMapCache = await loadSlugToIdMap(token, collectionId);
-  return bettartenMapCache;
 }
 
 /* ----------------------------------------------------
@@ -141,17 +137,9 @@ export default async function handler(req, res) {
       WEBFLOW_TOKEN,
       WEBFLOW_COLLECTION,
       WEBFLOW_FEATURES_COLLECTION,
-      WEBFLOW_BETTARTEN_COLLECTION,
       SYS_API_USER,
       SYS_API_PASS,
     } = process.env;
-
-    if (!WEBFLOW_TOKEN) throw new Error("Missing env WEBFLOW_TOKEN");
-    if (!WEBFLOW_COLLECTION) throw new Error("Missing env WEBFLOW_COLLECTION");
-    if (!WEBFLOW_FEATURES_COLLECTION) throw new Error("Missing env WEBFLOW_FEATURES_COLLECTION");
-    if (!WEBFLOW_BETTARTEN_COLLECTION) throw new Error("Missing env WEBFLOW_BETTARTEN_COLLECTION");
-    if (!SYS_API_USER) throw new Error("Missing env SYS_API_USER");
-    if (!SYS_API_PASS) throw new Error("Missing env SYS_API_PASS");
 
     const limit = Math.min(parseInt(req.query.limit || "25", 10), 25);
     const dryRun = req.query.dry === "1";
@@ -166,7 +154,8 @@ export default async function handler(req, res) {
        SYSCARA – LOAD + FILTER (PLZ 24783)
     ---------------------------------------------- */
     const auth =
-      "Basic " + Buffer.from(`${SYS_API_USER}:${SYS_API_PASS}`).toString("base64");
+      "Basic " +
+      Buffer.from(`${SYS_API_USER}:${SYS_API_PASS}`).toString("base64");
 
     const sysRes = await fetch("https://api.syscara.com/sale/ads/", {
       headers: { Authorization: auth },
@@ -176,13 +165,15 @@ export default async function handler(req, res) {
     const sysAdsAll = Object.values(await sysRes.json());
 
     // ✅ NUR OSTERRÖNFELD
-    const sysAds = sysAdsAll.filter((ad) => ad?.store?.zipcode === "24783");
+    const sysAds = sysAdsAll.filter(
+      (ad) => ad?.store?.zipcode === "24783"
+    );
 
     const batch = sysAds.slice(offset, offset + limit);
     const sysMap = new Map(sysAds.map((a) => [String(a.id), a]));
 
     /* ----------------------------------------------
-       WEBFLOW ITEMS (fahrzeug-id → item)
+       WEBFLOW ITEMS
     ---------------------------------------------- */
     const wfMap = new Map();
     let wfOffset = 0;
@@ -203,13 +194,9 @@ export default async function handler(req, res) {
       wfOffset += 100;
     }
 
-    /* ----------------------------------------------
-       LOOKUP MAPS: Features + Bettarten
-    ---------------------------------------------- */
-    const featureMap = await getFeatureMap(WEBFLOW_TOKEN, WEBFLOW_FEATURES_COLLECTION);
-    const bettartenMap = await getBettartenMap(
+    const featureMap = await getFeatureMap(
       WEBFLOW_TOKEN,
-      WEBFLOW_BETTARTEN_COLLECTION
+      WEBFLOW_FEATURES_COLLECTION
     );
 
     let created = 0;
@@ -233,7 +220,8 @@ export default async function handler(req, res) {
         if (mapped["media-cache"]) {
           const cache = JSON.parse(mapped["media-cache"]);
 
-          if (cache.hauptbild) mapped.hauptbild = `${origin}/api/media?id=${cache.hauptbild}`;
+          if (cache.hauptbild)
+            mapped.hauptbild = `${origin}/api/media?id=${cache.hauptbild}`;
 
           if (Array.isArray(cache.galerie)) {
             mapped.galerie = cache.galerie
@@ -241,10 +229,11 @@ export default async function handler(req, res) {
               .map((id) => `${origin}/api/media?id=${id}`);
           }
 
-          if (cache.grundriss) mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
+          if (cache.grundriss)
+            mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
         }
 
-        // FEATURES (slug → id)
+        // FEATURES
         const featureIds = (mapped.featureSlugs || [])
           .map((s) => featureMap[s])
           .filter(Boolean);
@@ -252,15 +241,6 @@ export default async function handler(req, res) {
         delete mapped.featureSlugs;
         mapped.features = featureIds;
 
-        // BETTARTEN (slug → id)
-        const bettartenIds = (mapped.bettartenSlugs || [])
-          .map((s) => bettartenMap[s])
-          .filter(Boolean);
-
-        delete mapped.bettartenSlugs;
-        mapped.bettarten = bettartenIds;
-
-        // HASH
         const hash = createHash(mapped);
         mapped["sync-hash"] = hash;
 
@@ -283,7 +263,11 @@ export default async function handler(req, res) {
                 fieldData: mapped,
               }
             );
-            await publishItem(WEBFLOW_COLLECTION, WEBFLOW_TOKEN, existing.id);
+            await publishItem(
+              WEBFLOW_COLLECTION,
+              WEBFLOW_TOKEN,
+              existing.id
+            );
           }
 
           updated++;
@@ -299,13 +283,20 @@ export default async function handler(req, res) {
                 fieldData: mapped,
               }
             );
-            await publishItem(WEBFLOW_COLLECTION, WEBFLOW_TOKEN, createdItem.id);
+            await publishItem(
+              WEBFLOW_COLLECTION,
+              WEBFLOW_TOKEN,
+              createdItem.id
+            );
           }
 
           created++;
         }
       } catch (e) {
-        errors.push({ syscaraId: ad?.id || null, error: String(e) });
+        errors.push({
+          syscaraId: ad?.id || null,
+          error: String(e),
+        });
       }
     }
 
@@ -315,7 +306,11 @@ export default async function handler(req, res) {
     for (const [fid, item] of wfMap.entries()) {
       if (!sysMap.has(fid)) {
         if (!dryRun) {
-          await unpublishLiveItem(WEBFLOW_COLLECTION, item.id, WEBFLOW_TOKEN);
+          await unpublishLiveItem(
+            WEBFLOW_COLLECTION,
+            item.id,
+            WEBFLOW_TOKEN
+          );
           await wf(
             `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items/${item.id}`,
             "DELETE",
@@ -329,7 +324,9 @@ export default async function handler(req, res) {
     /* ----------------------------------------------
        OFFSET UPDATE
     ---------------------------------------------- */
-    const nextOffset = offset + limit >= sysAds.length ? 0 : offset + limit;
+    const nextOffset =
+      offset + limit >= sysAds.length ? 0 : offset + limit;
+
     if (!dryRun) {
       await redisSet(OFFSET_KEY, nextOffset);
     }
