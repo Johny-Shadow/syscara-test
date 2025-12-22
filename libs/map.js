@@ -21,7 +21,7 @@ export function mapVehicle(ad) {
   const producer = ad.model?.producer || "";
   const series = ad.model?.series || "";
   const model = ad.model?.model || "";
-  const modelAdd = ad.model?.model_add || ""; // ✅ NEU
+  const modelAdd = ad.model?.model_add || "";
 
   const name =
     [producer, series, model].filter(Boolean).join(" ") ||
@@ -80,10 +80,6 @@ export function mapVehicle(ad) {
     ? String(ad.beds.num)
     : "";
 
-  const bett = Array.isArray(ad.beds?.beds)
-    ? ad.beds.beds.map((b) => b.type).join(", ")
-    : "";
-
   const sitzgruppe = Array.isArray(ad.seating?.seatings)
     ? ad.seating.seatings.map((s) => s.type).join(", ")
     : "";
@@ -91,14 +87,9 @@ export function mapVehicle(ad) {
   // ------------------------------------------------
   // 6) Technik
   // ------------------------------------------------
-  const ps =
-    ad.engine?.ps != null ? String(ad.engine.ps) : "";
-
-  const kw =
-    ad.engine?.kw != null ? String(ad.engine.kw) : "";
-
+  const ps = ad.engine?.ps != null ? String(ad.engine.ps) : "";
+  const kw = ad.engine?.kw != null ? String(ad.engine.kw) : "";
   const kraftstoff = ad.engine?.fuel || "";
-
   const getriebe = ad.engine?.gear || "";
 
   // ------------------------------------------------
@@ -123,16 +114,27 @@ export function mapVehicle(ad) {
     : "";
 
   // ------------------------------------------------
-  // 10) Features → SLUGS
+  // 10) FEATURES → SLUGS
   // ------------------------------------------------
-  const features = Array.isArray(ad.features) ? ad.features : [];
-
-  const featureSlugs = features.map((f) =>
-    String(f).toLowerCase().replace(/_/g, "-")
-  );
+  const featureSlugs = Array.isArray(ad.features)
+    ? ad.features.map((f) =>
+        String(f).toLowerCase().replace(/_/g, "-")
+      )
+    : [];
 
   // ------------------------------------------------
-  // 11) Media-Cache
+  // 11) BETTARTEN → SLUGS ✅ NEU
+  // ------------------------------------------------
+  const bedSlugs = Array.isArray(ad.beds?.beds)
+    ? ad.beds.beds
+        .map((b) =>
+          String(b.type).toLowerCase().replace(/_/g, "-")
+        )
+        .filter(Boolean)
+    : [];
+
+  // ------------------------------------------------
+  // 12) Media-Cache
   // ------------------------------------------------
   const media = Array.isArray(ad.media) ? ad.media : [];
 
@@ -151,7 +153,7 @@ export function mapVehicle(ad) {
   });
 
   // ------------------------------------------------
-  // 12) RÜCKGABE
+  // 13) RETURN
   // ------------------------------------------------
   return {
     name,
@@ -161,7 +163,7 @@ export function mapVehicle(ad) {
     hersteller: producer,
     serie: series,
     modell: model,
-    "modell-zusatz": modelAdd, // ✅ NEU
+    "modell-zusatz": modelAdd,
 
     fahrzeugart,
     fahrzeugtyp,
@@ -178,7 +180,6 @@ export function mapVehicle(ad) {
 
     erstzulassung,
     schlafplatz,
-    bett,
     sitzgruppe,
 
     ps,
@@ -192,6 +193,7 @@ export function mapVehicle(ad) {
     "verkauf-miete": verkaufMiete,
 
     featureSlugs,
+    bedSlugs,
 
     "media-cache": mediaCache,
   };
