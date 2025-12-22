@@ -85,7 +85,18 @@ export function mapVehicle(ad) {
     : "";
 
   // ------------------------------------------------
-  // 6) Technik
+  // 6) BETTARTEN → SLUGS (NEU & KORREKT)
+  // ------------------------------------------------
+  const bedTypesRaw = Array.isArray(ad.beds?.beds)
+    ? ad.beds.beds.map((b) => b.type)
+    : [];
+
+  const bettartenSlugs = bedTypesRaw.map((b) =>
+    String(b).toLowerCase().replace(/_/g, "-")
+  );
+
+  // ------------------------------------------------
+  // 7) Technik
   // ------------------------------------------------
   const ps = ad.engine?.ps != null ? String(ad.engine.ps) : "";
   const kw = ad.engine?.kw != null ? String(ad.engine.kw) : "";
@@ -93,7 +104,7 @@ export function mapVehicle(ad) {
   const getriebe = ad.engine?.gear || "";
 
   // ------------------------------------------------
-  // 7) Texte
+  // 8) Texte
   // ------------------------------------------------
   const beschreibung =
     ad.texts?.description ||
@@ -101,37 +112,26 @@ export function mapVehicle(ad) {
     "";
 
   // ------------------------------------------------
-  // 8) Verkauf / Miete
+  // 9) Verkauf / Miete
   // ------------------------------------------------
   const verkaufMiete =
     ad.category === "Rent" ? "miete" : "verkauf";
 
   // ------------------------------------------------
-  // 9) Geräte-ID
+  // 10) Geräte-ID
   // ------------------------------------------------
   const geraetId = ad.identifier?.internal
     ? String(ad.identifier.internal)
     : "";
 
   // ------------------------------------------------
-  // 10) FEATURES → SLUGS
+  // 11) Features → SLUGS
   // ------------------------------------------------
-  const featureSlugs = Array.isArray(ad.features)
-    ? ad.features.map((f) =>
-        String(f).toLowerCase().replace(/_/g, "-")
-      )
-    : [];
+  const features = Array.isArray(ad.features) ? ad.features : [];
 
-  // ------------------------------------------------
-  // 11) BETTARTEN → SLUGS ✅ NEU
-  // ------------------------------------------------
-  const bedSlugs = Array.isArray(ad.beds?.beds)
-    ? ad.beds.beds
-        .map((b) =>
-          String(b.type).toLowerCase().replace(/_/g, "-")
-        )
-        .filter(Boolean)
-    : [];
+  const featureSlugs = features.map((f) =>
+    String(f).toLowerCase().replace(/_/g, "-")
+  );
 
   // ------------------------------------------------
   // 12) Media-Cache
@@ -153,7 +153,7 @@ export function mapVehicle(ad) {
   });
 
   // ------------------------------------------------
-  // 13) RETURN
+  // 13) RÜCKGABE
   // ------------------------------------------------
   return {
     name,
@@ -193,7 +193,7 @@ export function mapVehicle(ad) {
     "verkauf-miete": verkaufMiete,
 
     featureSlugs,
-    bedSlugs,
+    bettartenSlugs, // ✅ NEU
 
     "media-cache": mediaCache,
   };
