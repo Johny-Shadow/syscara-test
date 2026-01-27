@@ -172,8 +172,7 @@ export default async function handler(req, res) {
       SYS_API_PASS,
     } = process.env;
 
-    // SICHERHEITS-LIMIT FÜR TEST: Nur 2 Fahrzeuge
-    const limit = 2;
+    const limit = Math.min(parseInt(req.query.limit || "25", 10), 25);
     const dryRun = req.query.dry === "1";
     const origin = getOrigin(req);
 
@@ -289,19 +288,16 @@ export default async function handler(req, res) {
           mapped.bettkategorien = bettartenIds; // ✅ API FIELD NAME
         }
 
-        // 🔐 STABILER CLEAN HASH
-        // Wir hashen nur die kritischen Rohdaten von Syscara, 
-        // die sich nicht durch Webflow-Formatierung ändern.
+        // 🔐 STABILER CLEAN HASH v2.0
         const cleanData = {
           id: ad.id,
           price: ad.prices?.offer,
           mileage: ad.mileage,
           images: JSON.parse(mapped["media-cache"]), // Stabile IDs
-          // Die neuen Felder für Maße/Gewicht/Schlafplätze mit in den Hash:
           dimensions: ad.dimensions,
           weights: ad.weights,
           beds: ad.beds?.num,
-          _v: "2.0" // Neue Hash-Generation
+          _v: "2.0"
         };
         const hash = createHash(cleanData);
         mapped["sync-hash"] = hash;
@@ -313,12 +309,6 @@ export default async function handler(req, res) {
           if (existingHash === hash) {
             skipped++;
             continue;
-          } else {
-            console.log(`HASH MISMATCH for ${mapped["fahrzeug-id"]}:`);
-            console.log(`  Calculated: ${hash}`);
-            console.log(`  In Webflow: ${existingHash}`);
-            // Optional: Zeige Unterschiede in den Daten (nur im Log)
-            // console.log(`  Data: ${JSON.stringify(mapped)}`);
           }
 
           if (!dryRun) {
@@ -396,8 +386,7 @@ export default async function handler(req, res) {
     const nextOffset =
       offset + limit >= sysAds.length ? 0 : offset + limit;
 
-    // TEST-MODUS: Offset wird nicht weitergeschaltet, um dieselben Fahrzeuge erneut zu prüfen
-    if (!dryRun && false) {
+    if (!dryRun) {
       await redisSet(OFFSET_KEY, nextOffset);
     }
 
