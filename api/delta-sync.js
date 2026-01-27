@@ -288,15 +288,8 @@ export default async function handler(req, res) {
           mapped.bettkategorien = bettartenIds; // ✅ API FIELD NAME
         }
 
-        // Hash mit Versionsnummer
-        // Wir nutzen das media-cache Feld (enthält reine IDs) für den Hash, 
-        // statt der fertigen URLs mit dynamischem Hostnamen.
-        const hashData = { ...mapped, _version: "1.2" };
-        delete hashData.hauptbild;
-        delete hashData.galerie;
-        delete hashData.grundriss;
-        
-        const hash = createHash(hashData);
+        // 🔐 Change Detection (Ursprüngliches Verhalten wiederhergestellt)
+        const hash = createHash(mapped);
         mapped["sync-hash"] = hash;
 
         const existing = wfMap.get(mapped["fahrzeug-id"]);
