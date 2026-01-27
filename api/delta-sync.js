@@ -289,8 +289,21 @@ export default async function handler(req, res) {
           mapped.bettkategorien = bettartenIds; // ✅ API FIELD NAME
         }
 
-        // 🔐 Change Detection (Ursprüngliches Verhalten wiederhergestellt)
-        const hash = createHash(mapped);
+        // 🔐 STABILER CLEAN HASH
+        // Wir hashen nur die kritischen Rohdaten von Syscara, 
+        // die sich nicht durch Webflow-Formatierung ändern.
+        const cleanData = {
+          id: ad.id,
+          price: ad.prices?.offer,
+          mileage: ad.mileage,
+          images: JSON.parse(mapped["media-cache"]), // Stabile IDs
+          // Die neuen Felder für Maße/Gewicht/Schlafplätze mit in den Hash:
+          dimensions: ad.dimensions,
+          weights: ad.weights,
+          beds: ad.beds?.num,
+          _v: "2.0" // Neue Hash-Generation
+        };
+        const hash = createHash(cleanData);
         mapped["sync-hash"] = hash;
 
         const existing = wfMap.get(mapped["fahrzeug-id"]);
