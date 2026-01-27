@@ -172,7 +172,8 @@ export default async function handler(req, res) {
       SYS_API_PASS,
     } = process.env;
 
-    const limit = Math.min(parseInt(req.query.limit || "25", 10), 25);
+    // SICHERHEITS-LIMIT FÜR TEST: Nur 2 Fahrzeuge
+    const limit = 2;
     const dryRun = req.query.dry === "1";
     const origin = getOrigin(req);
 
