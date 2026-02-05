@@ -131,7 +131,7 @@ async function getBettartenMap(token, collectionId) {
 
   while (true) {
     const res = await wf(
-      `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items?limit=100&offset=${offset}`,
+      `${WEBFLOW_BASE}/collections/${collectionId}/items?limit=100&offset=${offset}`,
       "GET",
       token
     );
