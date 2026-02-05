@@ -92,15 +92,6 @@ async function publishItem(collectionId, token, itemId) {
 }
 
 /* ----------------------------------------------------
-   ORIGIN (Media Proxy)
----------------------------------------------------- */
-function getOrigin(req) {
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  return `${proto}://${host}`;
-}
-
-/* ----------------------------------------------------
    FEATURE MAP (slug → ID)
 ---------------------------------------------------- */
 async function getFeatureMap(token, collectionId) {
@@ -140,7 +131,7 @@ async function getBettartenMap(token, collectionId) {
 
   while (true) {
     const res = await wf(
-      `${WEBFLOW_BASE}/collections/${collectionId}/items?limit=100&offset=${offset}`,
+      `${WEBFLOW_BASE}/collections/${WEBFLOW_COLLECTION}/items?limit=100&offset=${offset}`,
       "GET",
       token
     );
@@ -174,7 +165,6 @@ export default async function handler(req, res) {
 
     const limit = Math.min(parseInt(req.query.limit || "25", 10), 25);
     const dryRun = req.query.dry === "1";
-    const origin = getOrigin(req);
 
     /* ----------------------------------------------
        OFFSET
@@ -235,6 +225,35 @@ export default async function handler(req, res) {
       WEBFLOW_BETTARTEN_COLLECTION
     );
 
+    /* ----------------------------------------------
+       BATCH MEDIA PATHS (CDN LINKS)
+    ---------------------------------------------- */
+    const allMediaIds = [];
+    batch.forEach(ad => {
+      const media = Array.isArray(ad.media) ? ad.media : [];
+      media.forEach(m => {
+        if (m.id && (m.group === 'image' || m.group === 'layout')) {
+          allMediaIds.push(m.id);
+        }
+      });
+    });
+
+    const mediaPathMap = new Map();
+    if (allMediaIds.length > 0) {
+      const idsStr = `[${allMediaIds.join(',')}]`;
+      const pathRes = await fetch(`https://api.syscara.com/data/media/?media_id=${idsStr}&file=path`, {
+        headers: { Authorization: auth },
+      });
+      if (pathRes.ok) {
+        const pathData = await pathRes.json();
+        if (typeof pathData === 'object' && !Array.isArray(pathData)) {
+          Object.entries(pathData).forEach(([mid, info]) => {
+            if (info && info.file) mediaPathMap.set(Number(mid), info.file);
+          });
+        }
+      }
+    }
+
     let created = 0;
     let updated = 0;
     let skipped = 0;
@@ -252,24 +271,27 @@ export default async function handler(req, res) {
         const km = parseInt(mapped.kilometer, 10);
         mapped.kilometer = Number.isFinite(km) ? String(km) : "0";
 
-        // MEDIA
+        // MEDIA (CDN DIRECT LINKS)
         if (mapped["media-cache"]) {
           const cache = JSON.parse(mapped["media-cache"]);
 
-          if (cache.hauptbild)
-            mapped.hauptbild = `${origin}/api/media?id=${cache.hauptbild}`;
+          if (cache.hauptbild) {
+            mapped.hauptbild = mediaPathMap.get(cache.hauptbild) || "";
+          }
 
           if (Array.isArray(cache.galerie)) {
             mapped.galerie = cache.galerie
               .slice(0, 25)
-              .map((id) => `${origin}/api/media?id=${id}`);
+              .map(id => mediaPathMap.get(id))
+              .filter(Boolean);
           }
 
-          if (cache.grundriss)
-            mapped.grundriss = `${origin}/api/media?id=${cache.grundriss}`;
+          if (cache.grundriss) {
+            mapped.grundriss = mediaPathMap.get(cache.grundriss) || "";
+          }
         }
 
-        // FEATURES (unverändert)
+        // FEATURES
         const featureIds = (mapped.featureSlugs || [])
           .map((s) => featureMap[s])
           .filter(Boolean);
@@ -277,7 +299,7 @@ export default async function handler(req, res) {
         delete mapped.featureSlugs;
         mapped.features = featureIds;
 
-        // BETTKATEGORIEN (NEU, MINIMAL)
+        // BETTKATEGORIEN
         const bettartenIds = (mapped.bettartenSlugs || [])
           .map((s) => bettartenMap[s])
           .filter(Boolean);
@@ -285,9 +307,10 @@ export default async function handler(req, res) {
         delete mapped.bettartenSlugs;
 
         if (bettartenIds.length > 0) {
-          mapped.bettkategorien = bettartenIds; // ✅ API FIELD NAME
+          mapped.bettkategorien = bettartenIds;
         }
 
+        // 🔐 Change Detection (Ursprüngliches Verhalten)
         const hash = createHash(mapped);
         mapped["sync-hash"] = hash;
 
@@ -348,7 +371,7 @@ export default async function handler(req, res) {
     }
 
     /* ----------------------------------------------
-       DELETE (nicht mehr PLZ 24783 oder entfernt)
+       DELETE
     ---------------------------------------------- */
     for (const [fid, item] of wfMap.entries()) {
       if (!sysMap.has(fid)) {
