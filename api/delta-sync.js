@@ -421,3 +421,4 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: String(err) });
   }
 }
+// Stable CDN Sync Version 1.0.1
